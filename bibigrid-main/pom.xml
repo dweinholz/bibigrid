@@ -88,11 +88,11 @@
 
     <dependencies>
         <!-- General -->
-        <dependency>
+        <!--<dependency>
             <groupId>com.github.BiBiServ.bibiserv</groupId>
             <artifactId>bibiservabstraction</artifactId>
             <version>2.1.0</version>
-        </dependency>
+        </dependency> -->
         <dependency>
             <groupId>de.unibi.cebitec.bibigrid</groupId>
             <artifactId>bibigrid-core</artifactId>

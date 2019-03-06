@@ -5,7 +5,6 @@ import de.unibi.cebitec.bibigrid.core.model.IntentMode;
 import de.unibi.cebitec.bibigrid.core.model.ProviderModule;
 import de.unibi.cebitec.bibigrid.core.model.exceptions.ConfigurationException;
 import de.unibi.cebitec.bibigrid.core.util.DefaultPropertiesFile;
-import de.unibi.cebitec.bibigrid.core.util.RuleBuilder;
 import org.apache.commons.cli.CommandLine;
 
 import java.util.ArrayList;

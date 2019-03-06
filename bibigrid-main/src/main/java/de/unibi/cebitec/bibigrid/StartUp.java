@@ -6,7 +6,6 @@ import de.unibi.cebitec.bibigrid.core.model.*;
 import de.unibi.cebitec.bibigrid.core.model.exceptions.ClientConnectionFailedException;
 import de.unibi.cebitec.bibigrid.core.model.exceptions.ConfigurationException;
 import de.unibi.cebitec.bibigrid.core.util.DefaultPropertiesFile;
-import de.unibi.cebitec.bibigrid.core.util.RuleBuilder;
 import de.unibi.cebitec.bibigrid.core.util.VerboseOutputFilter;
 
 import java.io.IOException;
@@ -19,8 +18,7 @@ import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 import java.util.stream.Collectors;
 
-import de.unibi.techfak.bibiserv.cms.Tparam;
-import de.unibi.techfak.bibiserv.cms.TparamGroup;
+import de.unibi.cebitec.bibigrid.openstack.ConfigurationOpenstack;
 import org.apache.commons.cli.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,27 +67,18 @@ public class StartUp {
         return intentOptions;
     }
 
-    private static Options getRulesToOptions() {
-        RuleBuilder ruleBuild = new RuleBuilder();
-        TparamGroup ruleSet = ruleBuild.getRules();
-        Options ruleOptions = new Options();
-        for (Object ob : ruleSet.getParamrefOrParamGroupref()) {
-            Tparam tp = (Tparam) ob;
-            boolean hasArg;
-            hasArg = tp.getType() != null;
-            try {
-                ruleOptions.addOption(new Option(tp.getId(), tp.getOption(), hasArg, tp.getShortDescription().get(0).getValue()));
-            } catch (IllegalArgumentException e) {
-                throw new RuntimeException(String.format("Exception while adding Option '%s' (%s) -> %s",tp.getId(),tp.getShortDescription().get(0).getValue(),e.getMessage() ));
-            }
-        }
-        return ruleOptions;
+    private static Options getCMDLineOptions() {
+        Options cmdLineOptions = new Options();
+        cmdLineOptions
+                .addOption(new Option("v","verboose",false,"more verbose output"))
+                .addOption(new Option("o","config",true,"json configuration file"));
+        return cmdLineOptions;
     }
 
     public static void main(String[] args) {
         CommandLineParser cli = new DefaultParser();
         OptionGroup intentOptions = getCMDLineOptionGroup();
-        Options cmdLineOptions = getRulesToOptions();
+        Options cmdLineOptions = getCMDLineOptions();
         cmdLineOptions.addOptionGroup(intentOptions);
         try {
             CommandLine cl = cli.parse(cmdLineOptions, args);
@@ -134,11 +123,6 @@ public class StartUp {
     }
 
     private static void printHelp(CommandLine commandLine, Options cmdLineOptions) {
-        // TODO: improve help modes
-        if (commandLine.hasOption(RuleBuilder.RuleNames.HELP_LIST_INSTANCE_TYPES.getShortParam())) {
-            runIntent(commandLine, IntentMode.HELP);
-            return;
-        }
         HelpFormatter help = new HelpFormatter();
         String header = "\nDocumentation at https://github.com/BiBiServ/bibigrid/docs\n\n";
         header += "Loaded provider modules: " + String.join(", ", Provider.getInstance().getProviderNames()) + "\n\n";
@@ -149,7 +133,7 @@ public class StartUp {
 
     private static void runIntent(CommandLine commandLine, IntentMode intentMode) {
         DefaultPropertiesFile defaultPropertiesFile = new DefaultPropertiesFile(commandLine);
-        String providerMode = parseProviderMode(commandLine, defaultPropertiesFile);
+        String providerMode = parseProviderMode(defaultPropertiesFile);
         if (providerMode == null) {
             LOG.error(StartUp.ABORT_WITH_NOTHING_STARTED);
             return;
@@ -159,32 +143,33 @@ public class StartUp {
             LOG.error(ABORT_WITH_NOTHING_STARTED);
             return;
         }
-        CommandLineValidator validator;
+
+
+        Configuration config;
         try {
-            validator = module.getCommandLineValidator(commandLine, defaultPropertiesFile, intentMode);
-        } catch (ConfigurationException e) {
-            LOG.error(ABORT_WITH_NOTHING_STARTED, e);
+            config= module.getConfiguration(defaultPropertiesFile);
+        } catch (ConfigurationException e){
+            LOG.error(e.getMessage());
+            LOG.error(ABORT_WITH_NOTHING_STARTED);
             return;
         }
-        if (validator.validate(providerMode)) {
+
+
+
             Client client;
             try {
-                client = module.getClient(validator.getConfig());
+                client = module.getClient(config);
             } catch (ClientConnectionFailedException e) {
                 LOG.error(ABORT_WITH_NOTHING_STARTED, e);
                 return;
             }
-            // In order to validate the native instance types, we need a client. So this step is deferred after
-            // client connection is established.
-            if (!validator.validateProviderTypes(client)) {
-                LOG.error(ABORT_WITH_NOTHING_STARTED);
-            }
+
             switch (intentMode) {
                 case HELP:
-                    printInstanceTypeHelp(module, client, validator.getConfig());
+                    printInstanceTypeHelp(module, client, config);
                     break;
                 case LIST:
-                    ListIntent listIntent = module.getListIntent(client, validator.getConfig());
+                    ListIntent listIntent = module.getListIntent(client, config);
                     String clusterId = commandLine.getOptionValue(IntentMode.LIST.getShortParam());
                     if (clusterId != null) {
                         LOG.info(listIntent.toDetailString(clusterId));
@@ -193,43 +178,40 @@ public class StartUp {
                     }
                     break;
                 case VALIDATE:
-                    if (module.getValidateIntent(client, validator.getConfig()).validate()) {
+                    if (module.getValidateIntent(client, config).validate()) {
                        LOG.info(I, "You can now start your cluster.");
                     } else {
                        LOG.error("There were one or more errors. Please adjust your configuration.");
                     }
                     break;
                 case CREATE:
-                    if (module.getValidateIntent(client, validator.getConfig()).validate()) {
-                        runCreateIntent(module, validator, client, module.getCreateIntent(client, validator.getConfig()), false);
+                    if (module.getValidateIntent(client, config).validate()) {
+                        runCreateIntent(module, config, client, module.getCreateIntent(client, config), false);
                     } else {
                         LOG.error("There were one or more errors. Please adjust your configuration.");
                     }
                     break;
                 case PREPARE:
-                    CreateCluster cluster = module.getCreateIntent(client, validator.getConfig());
-                    if (runCreateIntent(module, validator, client, cluster, true)) {
-                        module.getPrepareIntent(client, validator.getConfig()).prepare(cluster.getMasterInstance(),
+                    CreateCluster cluster = module.getCreateIntent(client, config);
+                    if (runCreateIntent(module, config, client, cluster, true)) {
+                        module.getPrepareIntent(client, config).prepare(cluster.getMasterInstance(),
                                 cluster.getSlaveInstances());
-                        module.getTerminateIntent(client, validator.getConfig()).terminate();
+                        module.getTerminateIntent(client, config).terminate();
                     }
                     break;
                 case TERMINATE:
-                    module.getTerminateIntent(client, validator.getConfig()).terminate();
+                    module.getTerminateIntent(client, config).terminate();
                     break;
                 case CLOUD9:
-                    new Cloud9Intent(module, client, validator.getConfig()).start();
+                    new Cloud9Intent(module, client, config).start();
                     break;
                 default:
                     break;
             }
-        } else {
-            LOG.error(ABORT_WITH_NOTHING_STARTED);
-        }
+
     }
 
-    private static boolean runCreateIntent(ProviderModule module, CommandLineValidator validator, Client client,
-                                           CreateCluster cluster, boolean prepare) {
+    private static boolean runCreateIntent(ProviderModule module, Configuration config, Client client, CreateCluster cluster, boolean prepare) {
         try {
             boolean success = cluster
                     .createClusterEnvironment()
@@ -242,7 +224,7 @@ public class StartUp {
                     .launchClusterInstances(prepare);
             if (!success) {
                 LOG.error(StartUp.ABORT_WITH_INSTANCES_RUNNING);
-                TerminateIntent cleanupIntent = module.getTerminateIntent(client, validator.getConfig());
+                TerminateIntent cleanupIntent = module.getTerminateIntent(client, config);
                 cleanupIntent.terminate();
                 return false;
             }
@@ -258,20 +240,13 @@ public class StartUp {
         return true;
     }
 
-    private static String parseProviderMode(CommandLine commandLine, DefaultPropertiesFile defaultPropertiesFile) {
-        if (!commandLine.hasOption("mode")) {
-            String[] providerNames = Provider.getInstance().getProviderNames();
-            if (defaultPropertiesFile.getPropertiesMode() == null && providerNames.length == 1) {
-                return providerNames[0];
-            }
-            if (defaultPropertiesFile.getPropertiesMode() != null) {
-                return defaultPropertiesFile.getPropertiesMode();
-            }
-        } else {
-            try {
-                return commandLine.getOptionValue("mode", "").trim();
-            } catch (IllegalArgumentException ignored) {
-            }
+    private static String parseProviderMode(DefaultPropertiesFile defaultPropertiesFile) {
+        String[] providerNames = Provider.getInstance().getProviderNames();
+        if (defaultPropertiesFile.getPropertiesMode() == null && providerNames.length == 1) {
+            return providerNames[0];
+        }
+        if (defaultPropertiesFile.getPropertiesMode() != null) {
+            return defaultPropertiesFile.getPropertiesMode();
         }
         LOG.error("No suitable mode found in command line or properties file. Exit");
         return null;

@@ -26,6 +26,9 @@ class ClientOpenstack extends Client {
     private final OSClient internalClient;
 
     ClientOpenstack(ConfigurationOpenstack config) throws ClientConnectionFailedException {
+        // load
+
+
         OpenStackCredentials credentials = config.getOpenstackCredentials();
         try {
             OSFactory.enableHttpLoggingFilter(config.isDebugRequests());

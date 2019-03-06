@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.HashMap;
 
 /**
- * @author mfriedrichs(at)techfak.uni-bielefeld.de
+ * @author mfriedrichs(at)techfak.uni-bielefeld.de, jkrueger(at)cebitec.uni-bielefeld.de
  */
 @SuppressWarnings("unused")
 public class ProviderModuleOpenstack extends ProviderModule {
@@ -23,12 +23,10 @@ public class ProviderModuleOpenstack extends ProviderModule {
         return "openstack";
     }
 
+
     @Override
-    public CommandLineValidator getCommandLineValidator(final CommandLine commandLine,
-                                                        final DefaultPropertiesFile defaultPropertiesFile,
-                                                        final IntentMode intentMode)
-            throws ConfigurationException {
-        return new CommandLineValidatorOpenstack(commandLine, defaultPropertiesFile, intentMode, this);
+    public Configuration getConfiguration(DefaultPropertiesFile defaultPropertiesFile) throws ConfigurationException {
+        return defaultPropertiesFile.loadConfiguration(ConfigurationOpenstack.class);
     }
 
     @Override
