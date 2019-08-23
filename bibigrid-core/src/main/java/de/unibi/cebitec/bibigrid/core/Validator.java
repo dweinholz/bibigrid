@@ -35,7 +35,7 @@ public abstract class Validator {
     protected final IntentMode intentMode;
     private final ProviderModule providerModule;
     protected final Configuration config;
-    private Configuration.SlaveInstanceConfiguration commandLineSlaveInstance;
+    private Configuration.WorkerInstanceConfiguration commandLineWorkerInstance;
 
     public Validator(final CommandLine cl, final ConfigurationFile configurationFile,
                      final IntentMode intentMode, final ProviderModule providerModule)
@@ -125,9 +125,10 @@ public abstract class Validator {
                 LOG.error("Ansible: hosts parameter not set.");
                 return false;
             } else if (!role.getHosts().equals("master") &&
-                    !role.getHosts().equals("slave") &&
+                    !role.getHosts().equals("worker") &&
+                    !role.getHosts().equals("workers") &&
                     !role.getHosts().equals("all")) {
-                LOG.error("Ansible: hosts parameter has to be defined either as 'master', 'slave' or 'all'.");
+                LOG.error("Ansible: hosts parameter has to be defined either as 'master', 'worker' or 'all'.");
                 return false;
             }
         }
@@ -148,9 +149,10 @@ public abstract class Validator {
                 LOG.error("Ansible Galaxy: hosts parameter not set.");
                 return false;
             } else if (!role.getHosts().equals("master") &&
-                    !role.getHosts().equals("slave") &&
+                    !role.getHosts().equals("worker") &&
+                    !role.getHosts().equals("workers") &&
                     !role.getHosts().equals("all")) {
-                LOG.error("Ansible Galaxy: hosts parameter has to be defined either as 'master', 'slave' or 'all'.");
+                LOG.error("Ansible Galaxy: hosts parameter has to be defined either as 'master', 'worker' or 'all'.");
                 return false;
             }
             if (role.getUrl() != null) {
@@ -266,12 +268,12 @@ public abstract class Validator {
             return false;
         }
         try {
-            for (Configuration.InstanceConfiguration instanceConfiguration : config.getSlaveInstances()) {
-                InstanceType slaveType = providerModule.getInstanceType(client, config, instanceConfiguration.getType());
-                instanceConfiguration.setProviderType(slaveType);
+            for (Configuration.InstanceConfiguration instanceConfiguration : config.getWorkerInstances()) {
+                InstanceType workerType = providerModule.getInstanceType(client, config, instanceConfiguration.getType());
+                instanceConfiguration.setProviderType(workerType);
             }
         } catch (InstanceTypeNotFoundException e) {
-            LOG.error("Invalid slave instance type specified!", e);
+            LOG.error("Invalid worker instance type specified!", e);
             return false;
         }
         return true;
