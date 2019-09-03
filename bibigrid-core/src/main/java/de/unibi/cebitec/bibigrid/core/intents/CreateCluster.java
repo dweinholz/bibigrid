@@ -157,6 +157,10 @@ public abstract class CreateCluster extends Intent {
             logFinishedInfoMessage(masterIp);
             saveGridPropertiesFile(masterIp);
         } catch (Exception e) {
+            if (Configuration.DEBUG) {
+                logFinishedInfoMessage(
+                        config.isUseMasterWithPublicIp() ? masterInstance.getPublicIp() : masterInstance.getPrivateIp());
+            }
             // print stacktrace only verbose mode, otherwise the message is fine
             if (VerboseOutputFilter.SHOW_VERBOSE) {
                 LOG.error(e.getMessage(), e);
@@ -294,6 +298,9 @@ public abstract class CreateCluster extends Intent {
                     }
                 }
             } catch (IOException | JSchException e) {
+                if (VerboseOutputFilter.SHOW_VERBOSE) {
+                    e.printStackTrace();
+                }
                 throw new ConfigurationException(e);
             }
         }
@@ -314,7 +321,7 @@ public abstract class CreateCluster extends Intent {
                                           AnsibleConfig commonConfig, List<Instance> workerInstances) throws JSchException, ConfigurationException {
 
         ChannelSftp channel = (ChannelSftp) sshSession.openChannel("sftp");
-        LOG.info("Upload Ansible playbook to master instance.");
+        LOG.info("Uploading Ansible playbook to master instance.");
         LOG.info(V, "Connecting sftp channel...");
         channel.connect();
         try {
@@ -531,7 +538,7 @@ public abstract class CreateCluster extends Intent {
      */
     private void installAndExecuteAnsible(final Session sshSession,  final boolean prepare)
             throws IOException, JSchException, ConfigurationException {
-        LOG.info("Configure and execute Ansible. This take a while. Please be patient.");
+        LOG.info("Ansible is now configuring your cloud instances. This might take a while.");
 
         String execCommand = ShellScriptCreator.getMasterAnsibleExecutionScript(prepare, config);
         ChannelExec channel = (ChannelExec) sshSession.openChannel("exec");
