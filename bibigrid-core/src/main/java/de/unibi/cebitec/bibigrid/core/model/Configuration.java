@@ -1,6 +1,5 @@
 package de.unibi.cebitec.bibigrid.core.model;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import de.unibi.cebitec.bibigrid.core.model.exceptions.ConfigurationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,9 +64,6 @@ public abstract class Configuration {
 
 
     /* properties */
-
-//    protected static final Logger LOG = LoggerFactory.getLogger(Configuration.class);
-//    private static final String DEFAULT_WORKSPACE = "$HOME";
     private String mode;
     private String user = System.getProperty("user.name");
     private String sshUser = "ubuntu";
