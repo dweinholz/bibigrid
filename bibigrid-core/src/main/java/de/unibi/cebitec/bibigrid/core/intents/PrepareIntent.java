@@ -1,9 +1,6 @@
 package de.unibi.cebitec.bibigrid.core.intents;
 
-import de.unibi.cebitec.bibigrid.core.model.Client;
-import de.unibi.cebitec.bibigrid.core.model.Configuration;
-import de.unibi.cebitec.bibigrid.core.model.Instance;
-import de.unibi.cebitec.bibigrid.core.model.ProviderModule;
+import de.unibi.cebitec.bibigrid.core.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,10 +23,14 @@ public abstract class PrepareIntent extends Intent {
 
     /**
      * Prepare cluster images for the cluster with id in configuration.
+     * TODO No usage?
      *
      * @return Return true in case of success, false otherwise
      */
-    public boolean prepare(final Instance masterInstance, final List<Instance> workerInstances) {
+    public boolean prepare(final CreateCluster cluster) {
+        Instance masterInstance = cluster.cluster.getMasterInstance();
+        List<Instance> workerInstances = cluster.cluster.getWorkerInstances();
+        String clusterId = cluster.cluster.getClusterId();
         LOG.info("Stopping {} instances...", workerInstances.size());
         stopInstance(masterInstance);
         for (Instance instance : workerInstances) {
@@ -45,13 +46,13 @@ public abstract class PrepareIntent extends Intent {
         LOG.info("Creating images...");
         LOG.info("Creating master instance image...");
         boolean success = true;
-        createImageFromInstance(masterInstance, IMAGE_PREFIX + "master-" + config.getClusterIds()[0]);
+        createImageFromInstance(masterInstance, IMAGE_PREFIX + "master-" + clusterId);
         List<String> alreadyCreatedWorkerImages = new ArrayList<>();
         for (Instance instance : workerInstances) {
             String imageType = instance.getConfiguration().getImage();
             if (!alreadyCreatedWorkerImages.contains(imageType)) {
                 alreadyCreatedWorkerImages.add(imageType);
-                String workerImageName = IMAGE_PREFIX + "worker-" + config.getClusterIds()[0] + "-" + alreadyCreatedWorkerImages.size();
+                String workerImageName = IMAGE_PREFIX + "worker-" + clusterId + "-" + alreadyCreatedWorkerImages.size();
                 if (!createImageFromInstance(instance, workerImageName)) {
                     success = false;
                 }

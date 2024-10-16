@@ -5,8 +5,6 @@ import de.unibi.cebitec.bibigrid.core.intents.*;
 import de.unibi.cebitec.bibigrid.core.model.exceptions.ClientConnectionFailedException;
 import de.unibi.cebitec.bibigrid.core.model.exceptions.ConfigurationException;
 import de.unibi.cebitec.bibigrid.core.model.exceptions.InstanceTypeNotFoundException;
-import de.unibi.cebitec.bibigrid.core.util.ConfigurationFile;
-import org.apache.commons.cli.CommandLine;
 
 import java.util.Collection;
 import java.util.Map;
@@ -26,53 +24,57 @@ public abstract class ProviderModule {
      */
     public abstract String getName();
 
+    /**
+     * Assigned during the createClient() implementation of the inheritors.
+     */
+    public Client client;
 
     /**
      * Get the configuration implementation for the specified provider, that have provider specific parameters.
      *
-     * @param path
-     * @return
-     * @throws ConfigurationException
+     * @param path String path to config file
+     * @return config loaded
+     * @throws ConfigurationException exception if config is wrong
      */
     public Configuration getConfiguration(String path) throws ConfigurationException {
-        return Configuration.loadConfiguration(getConfigurationClass(),path);
+        return Configuration.loadConfiguration(getConfigurationClass(), path);
     }
 
-
-    /**
-     *
-     * @return
-     */
     public abstract Class<? extends Configuration> getConfigurationClass();
 
     /**
      * Get the validator implementation for the specified provider, that can handle provider specific parameters.
      *
-     * @return
-     * @throws ConfigurationException
+     * @return validator to check cmdline and config
+     * @throws ConfigurationException exception if config is wrong
      */
-
     public abstract Validator getValidator(Configuration config, ProviderModule module) throws ConfigurationException;
 
-    public abstract Client getClient(Configuration config) throws ClientConnectionFailedException;
+    public abstract void createClient(Configuration config) throws ClientConnectionFailedException;
 
-    public abstract ListIntent getListIntent(Client client, Configuration config);
-
-    public abstract TerminateIntent getTerminateIntent(Client client, Configuration config);
-
-    public abstract PrepareIntent getPrepareIntent(Client client, Configuration config);
-
-    public abstract CreateCluster getCreateIntent(Client client, Configuration config);
-
-    public abstract CreateClusterEnvironment getClusterEnvironment(Client client, CreateCluster cluster)
-            throws ConfigurationException;
-
-    public ValidateIntent getValidateIntent(Client client, Configuration config) {
-        return new ValidateIntent(client, config);
+    public Client getClient() {
+        return client;
     }
 
-    public final InstanceType getInstanceType(Client client, Configuration config, String type) throws InstanceTypeNotFoundException {
-        getInstanceTypes(client, config);
+    public abstract ListIntent getListIntent(Map<String, Cluster> clusterMap);
+
+    public abstract TerminateIntent getTerminateIntent(Configuration config, Map<String, Cluster> clusterMap);
+
+    public abstract PrepareIntent getPrepareIntent(Configuration config);
+
+    public abstract CreateCluster getCreateIntent(Configuration config, String clusterId);
+
+    public abstract ScaleWorkerIntent getScaleWorkerIntent(Configuration config, String clusterId, int batchIndex, int count, String scaling);
+
+    public abstract LoadClusterConfigurationIntent getLoadClusterConfigurationIntent(Configuration config);
+
+    public abstract CreateClusterEnvironment getClusterEnvironment(CreateCluster cluster)
+            throws ConfigurationException;
+
+    public abstract ValidateIntent getValidateIntent(Configuration config);
+
+    public final InstanceType getInstanceType(Configuration config, String type) throws InstanceTypeNotFoundException {
+        getInstanceTypes(config);
         if (instanceTypes == null || !instanceTypes.containsKey(type)) {
             throw new InstanceTypeNotFoundException("Invalid instance type " + type);
         }
@@ -82,16 +84,16 @@ public abstract class ProviderModule {
     /**
      * Returns the block device base path for the specific provider implementation.
      *
-     * @return Block device base path for ex. "/dev/xvd" in AWS.
+     * @return Block device base path for ex. "/dev/xvd" in AWS, "/dev/vd" in OpenStack
      */
     public abstract String getBlockDeviceBase();
 
-    public final Collection<InstanceType> getInstanceTypes(Client client, Configuration config) {
+    public final Collection<InstanceType> getInstanceTypes(Configuration config) {
         if (instanceTypes == null) {
-            instanceTypes = getInstanceTypeMap(client, config);
+            instanceTypes = getInstanceTypeMap(config);
         }
         return instanceTypes.values();
     }
 
-    protected abstract Map<String, InstanceType> getInstanceTypeMap(Client client, Configuration config);
+    protected abstract Map<String, InstanceType> getInstanceTypeMap(Configuration config);
 }

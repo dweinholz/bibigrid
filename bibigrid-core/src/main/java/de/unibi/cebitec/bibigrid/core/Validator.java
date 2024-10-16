@@ -3,8 +3,8 @@ package de.unibi.cebitec.bibigrid.core;
 import de.unibi.cebitec.bibigrid.core.model.*;
 
 import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.lang.reflect.Method;
+import java.net.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -12,7 +12,6 @@ import java.util.*;
 
 import de.unibi.cebitec.bibigrid.core.model.exceptions.ConfigurationException;
 import de.unibi.cebitec.bibigrid.core.model.exceptions.InstanceTypeNotFoundException;
-import de.unibi.cebitec.bibigrid.core.util.SshFactory;
 
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
@@ -21,6 +20,8 @@ import org.json.simple.parser.ParseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static de.unibi.cebitec.bibigrid.core.Constant.ABORT_WITH_NOTHING_STARTED;
+
 /**
  * Checks, if commandline and configuration input is set correctly.
  */
@@ -28,7 +29,6 @@ public abstract class Validator {
     protected static final Logger LOG = LoggerFactory.getLogger(Validator.class);
 
     protected final List<String> req;
-
     private final ProviderModule providerModule;
 
     protected Configuration config;
@@ -47,22 +47,18 @@ public abstract class Validator {
      */
     protected abstract Class<? extends Configuration> getProviderConfigurationClass();
 
-
     /**
      * Checks, whether public keys files are readable
-     *
      * @return true, if file is valid
      */
     private boolean validateSSHKeyFiles() {
-
-
         List<String> keyFiles = new ArrayList<>(config.getSshPublicKeyFiles());
         if (config.getSshPublicKeyFile() != null) {
             keyFiles.add(config.getSshPublicKeyFile());
         }
 
-        for(String i : keyFiles) {
-            Path publicKeyFile = Paths.get(i);
+        for(String keyFile : keyFiles) {
+            Path publicKeyFile = Paths.get(keyFile);
             if (!Files.exists(publicKeyFile)) {
                 LOG.error("SshPublicKeyFile {} does not exists.", publicKeyFile.toString());
                 return false;
@@ -74,14 +70,14 @@ public abstract class Validator {
         }
         return true;
     }
+
     /**
      * Checks if ansible (galaxy) configuration is valid.
      * @return true, if file(s) found, galaxy, git or url defined and hosts given
      */
     private boolean validateAnsibleRequirements() {
-        if (config.hasCustomAnsibleRoles() || config.hasCustomAnsibleGalaxyRoles()) {
-            LOG.info("Checking Ansible configuration ...");
-        }
+        final String MISSING_HOST = "hosts parameter not set.";
+        final String HOST_DEFINE = "hosts parameter has to be defined as either 'master', 'worker', 'workers' or 'all'.";
         // Check Ansible roles
         for (Configuration.AnsibleRoles role : config.getAnsibleRoles()) {
             if (role.getFile() == null) {
@@ -99,18 +95,18 @@ public abstract class Validator {
             if (role.getVarsFile() != null) {
                 Path varFilePath = Paths.get(role.getVarsFile());
                 if (!Files.isReadable(varFilePath)){
-                    LOG.error("Ansible: varsFile '{}' does not exist.", varFilePath);
+                    LOG.error("Ansible: vars file '{}' does not exist.", varFilePath);
                     return false;
                 }
             }
             if (role.getHosts() == null) {
-                LOG.error("Ansible: hosts parameter not set.");
+                LOG.error("Ansible: " + MISSING_HOST);
                 return false;
             } else if (!role.getHosts().equals("master") &&
                     !role.getHosts().equals("worker") &&
                     !role.getHosts().equals("workers") &&
                     !role.getHosts().equals("all")) {
-                LOG.error("Ansible: hosts parameter has to be defined as either 'master', 'worker' or 'all'.");
+                LOG.error("Ansible: " + HOST_DEFINE);
                 return false;
             }
         }
@@ -123,18 +119,18 @@ public abstract class Validator {
             if (role.getVarsFile() != null) {
                 Path varFilePath = Paths.get(role.getVarsFile());
                 if (!Files.isReadable(varFilePath)){
-                    LOG.error("Ansible Galaxy: varsFile {} does not exist.", varFilePath);
+                    LOG.error("Ansible Galaxy: vars file {} does not exist.", varFilePath);
                     return false;
                 }
             }
             if (role.getHosts() == null) {
-                LOG.error("Ansible Galaxy: hosts parameter not set.");
+                LOG.error("Ansible Galaxy: " + MISSING_HOST);
                 return false;
             } else if (!role.getHosts().equals("master") &&
                     !role.getHosts().equals("worker") &&
                     !role.getHosts().equals("workers") &&
                     !role.getHosts().equals("all")) {
-                LOG.error("Ansible Galaxy: hosts parameter has to be defined as either 'master', 'worker' or 'all'.");
+                LOG.error("Ansible Galaxy: " + HOST_DEFINE);
                 return false;
             }
             if (role.getUrl() != null) {
@@ -155,6 +151,21 @@ public abstract class Validator {
                     return false;
                 }
             }
+        }
+        return true;
+    }
+
+
+    /**
+     * Validates CIDR by using regex pattern.
+     * @param serviceCIDR config parameter to
+     * @return true, if serviceCIDR provided in config matches pattern, false, if it does not
+     */
+    private boolean validateServiceCIDR(String serviceCIDR){
+        String pattern = "\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}/\\d{1,2}";
+        if (!serviceCIDR.matches(pattern)) {
+            LOG.error("Value '{}' of option serviceCIDR does not match pattern '{}'.", serviceCIDR, pattern);
+            return false;
         }
         return true;
     }
@@ -223,19 +234,35 @@ public abstract class Validator {
      * Checks requirements.
      * @return true, if requirements fulfilled
      */
-    public boolean validate() {
-        return validateSSHKeyFiles() &&
-                validateAnsibleRequirements() &&
-                validateProviderParameters();
+    public boolean validateConfiguration() {
+        boolean validProviderTypes = validateProviderTypes();
+        boolean validSSHKeyFiles = validateSSHKeyFiles();
+        boolean validAnsibleRequirements = true;
+        boolean validServiceCIDR = true;
+        if (config.hasCustomAnsibleRoles() || config.hasCustomAnsibleGalaxyRoles()) {
+            LOG.info("Checking Ansible configuration ...");
+            validAnsibleRequirements = validateAnsibleRequirements();
+        }
+        return validProviderTypes &&
+                validSSHKeyFiles &&
+                validAnsibleRequirements;
     }
 
     protected abstract List<String> getRequiredOptions();
 
-    protected abstract boolean validateProviderParameters();
+    /**
+     * Check provider specific configuration credentials.
+     * @return true, if validation successful, otherwise false
+     */
+    public abstract boolean validateProviderParameters();
 
-    public boolean validateProviderTypes(Client client) {
+    /**
+     * Checks master instanceType.
+     * @return true, if validation successful, otherwise false
+     */
+    public boolean validateProviderTypes() {
         try {
-            InstanceType masterType = providerModule.getInstanceType(client, config, config.getMasterInstance().getType());
+            InstanceType masterType = providerModule.getInstanceType(config, config.getMasterInstance().getType());
             config.getMasterInstance().setProviderType(masterType);
         } catch (InstanceTypeNotFoundException e) {
             LOG.error("Invalid master instance type specified!", e);
@@ -243,7 +270,7 @@ public abstract class Validator {
         }
         try {
             for (Configuration.InstanceConfiguration instanceConfiguration : config.getWorkerInstances()) {
-                InstanceType workerType = providerModule.getInstanceType(client, config, instanceConfiguration.getType());
+                InstanceType workerType = providerModule.getInstanceType(config, instanceConfiguration.getType());
                 instanceConfiguration.setProviderType(workerType);
             }
         } catch (InstanceTypeNotFoundException e) {
@@ -252,6 +279,27 @@ public abstract class Validator {
         }
         return true;
     }
+    /**
+     * Validate native instance types and configuration file when used.
+     * Step is deferred AFTER client connection is established
+     * @return true, if configuration file is invalid
+     */
+    public boolean configurationInvalid() {
+        try {
+            if (!validateConfiguration()) {
+                LOG.error(ABORT_WITH_NOTHING_STARTED);
+                return true;
+            }
+        } catch (Exception e){
+            LOG.error(e.getMessage());
+            if (Configuration.DEBUG) {
+                e.printStackTrace();
+            }
+            return true;
+        }
+        return false;
+    }
+
 
     protected static boolean isStringNullOrEmpty(final String s) {
         return s == null || s.trim().isEmpty();

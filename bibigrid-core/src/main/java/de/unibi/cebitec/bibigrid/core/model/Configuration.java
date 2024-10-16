@@ -1,16 +1,15 @@
 package de.unibi.cebitec.bibigrid.core.model;
 
+
+import de.unibi.cebitec.bibigrid.core.intents.IdeIntent;
 import de.unibi.cebitec.bibigrid.core.model.exceptions.ConfigurationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.error.YAMLException;
 
-
 import java.io.*;
-import java.net.URI;
-import java.nio.channels.SeekableByteChannel;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -21,13 +20,13 @@ import java.util.*;
 
 import static de.unibi.cebitec.bibigrid.core.util.VerboseOutputFilter.V;
 
-@SuppressWarnings({"WeakerAccess", "unused"})
+@SuppressWarnings({"WeakerAccess"})
 public abstract class Configuration {
     /* public const */
     public static boolean DEBUG = false;
-    public static final String DEFAULT_WORKSPACE = "$HOME";
     public static final String CONFIG_DIR = System.getProperty("user.home")+System.getProperty("file.separator")+".bibigrid";
     public static final String KEYS_DIR = CONFIG_DIR + System.getProperty("file.separator")+"keys";
+    public static final String LOG_DIR = CONFIG_DIR  + System.getProperty("file.separator") + "logs";
     public static final FileAttribute KEYS_PERMS = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"));
 
     /* protected const */
@@ -51,6 +50,13 @@ public abstract class Configuration {
             }
     }
 
+    /**
+     * Loads configuration from config yaml file.
+     * @param configurationClass provider dependent configuration class
+     * @param path path to config file
+     * @return loaded configuration
+     * @throws ConfigurationException error in config
+     */
     public static Configuration loadConfiguration(Class<? extends Configuration> configurationClass, String path) throws ConfigurationException{
         Path propertiesFilePath = null;
 
@@ -67,6 +73,7 @@ public abstract class Configuration {
         }
         if (propertiesFilePath == null) {
             propertiesFilePath = defaultPropertiesFilePath;
+            LOG.info("Using default configuration file ({}).", defaultPropertiesFilePath);
         }
 
         try {
@@ -75,15 +82,15 @@ public abstract class Configuration {
             if (DEBUG) {
                 e.printStackTrace();
             }
-            throw new ConfigurationException("Failed to load properties file.", e);
+            throw new ConfigurationException("Failed to load properties file.\n" +
+                    "You may want to use a default configuration.yml in the .bibigrid folder in your home directory.", e);
         } catch (YAMLException e) {
             throw new ConfigurationException("Failed to parse configuration file. "+e.getMessage(), e);
         }
-
     }
 
-
     /* properties */
+//    private static final String DEFAULT_WORKSPACE = "$HOME";
     private String mode;
     private String user = System.getProperty("user.name");
     private String sshUser = "ubuntu";
@@ -93,7 +100,7 @@ public abstract class Configuration {
     private List<String> sshPublicKeyFiles = new ArrayList<>();
     private List<String> sshPublicKeys = new ArrayList<>();
     private String id;
-    private ClusterKeyPair clusterKeyPair = new ClusterKeyPair();
+    private final ClusterKeyPair clusterKeyPair = new ClusterKeyPair();
     @Deprecated
     private String sshPrivateKeyFile;
     private String alternativeConfigPath;
@@ -109,30 +116,31 @@ public abstract class Configuration {
     private List<WorkerInstanceConfiguration> workerInstances = new ArrayList<>();
     private boolean oge;
     private boolean slurm;
+    private SlurmConf slurmConf = new SlurmConf();
     private boolean localDNSLookup;
     private String mungeKey;
     private boolean nfs = true;
-    private boolean cloud9;
-    private boolean theia;
-    private boolean ganglia;
+    private String serviceCIDR;
+    private IdeConf ideConf = new IdeConf();
     private boolean zabbix;
     private ZabbixConf zabbixConf = new ZabbixConf();
-    private List<String> nfsShares = new ArrayList<>(Arrays.asList("/vol/spool"));
+    private List<String> nfsShares = new ArrayList<>(Collections.singletonList("/vol/spool"));
     private List<MountPoint> masterMounts = new ArrayList<>();
     private List<MountPoint> extNfsShares = new ArrayList<>();
     private FS localFS = FS.XFS;
     private boolean debugRequests;
-    private Properties ogeConf = OgeConf.initOgeConfProperties();
     private List<AnsibleRoles> ansibleRoles = new ArrayList<>();
     private List<AnsibleGalaxyRoles> ansibleGalaxyRoles = new ArrayList<>();
+    private boolean useHostnames = false;
 
     private String network;
     private String subnet;
 
-    private String[] clusterIds = new String [0];
-
-    private String workspace = DEFAULT_WORKSPACE;
-
+    /**
+     * Calculates total amount of worker instances by incrementing batch instances.
+     * TODO manual scale increase / decrease total amount if not already done automatically
+     * @return total count of worker instances
+     */
     public int getWorkerInstanceCount() {
         if (workerInstances == null) {
             return 0;
@@ -184,8 +192,6 @@ public abstract class Configuration {
         return clusterKeyPair;
     }
 
-
-
     public String getSshPublicKeyFile() {
         return sshPublicKeyFile;
     }
@@ -220,7 +226,7 @@ public abstract class Configuration {
     public void setSshPrivateKeyFile(String sshPrivateKeyFile) {
         LOG.warn("Deprecation warning: Properties 'sshPrivateKeyFile' is not longer used.");
         this.sshPrivateKeyFile = sshPrivateKeyFile.trim();
-        LOG.info(V, "SSH private key file found. ({})", this.sshPrivateKeyFile);
+        LOG.info(V, "SSH private key file found! ({})", this.sshPrivateKeyFile);
     }
 
     public String getRegion() {
@@ -240,24 +246,11 @@ public abstract class Configuration {
         this.masterInstance = masterInstance;
         if (masterInstance != null) {
             StringBuilder display = new StringBuilder();
-            display.append("[type=").append(masterInstance.getType()).append(", image=")
+            display.append("\n[type=").append(masterInstance.getType()).append(", image=")
                     .append(masterInstance.getImage()).append("] ");
-            LOG.info(V, "Master instance configuration set: {}", display);
+            LOG.info(V, "Master instances set: {}", display);
         }
     }
-
-    @Deprecated
-    public List<WorkerInstanceConfiguration> getSlaveInstances() {
-        LOG.warn("Property 'slaveInstances' is deprecated and will be removed in next major release. It is replaced 1:1 by 'workerInstances'.");
-        return getWorkerInstances();
-    }
-
-    @Deprecated
-    public void setSlaveInstances(List<WorkerInstanceConfiguration> workerInstances) {
-            LOG.warn("Property 'slaveInstances' is deprecated and will be removed in next major release. It is replaced 1:1 by 'workerInstances'.");
-            setWorkerInstances(workerInstances);
-    }
-
 
     public List<WorkerInstanceConfiguration> getWorkerInstances() {
         return workerInstances;
@@ -268,11 +261,11 @@ public abstract class Configuration {
         if (workerInstances != null && !workerInstances.isEmpty()) {
             StringBuilder display = new StringBuilder();
             for (WorkerInstanceConfiguration instanceConfiguration : workerInstances) {
-                display.append("[type=").append(instanceConfiguration.getType())
+                display.append("\n[type=").append(instanceConfiguration.getType())
                         .append(", image=").append(instanceConfiguration.getImage())
-                        .append(", count=").append(instanceConfiguration.getCount()).append("] ");
+                        .append(", count=").append(instanceConfiguration.getCount()).append("]");
             }
-            LOG.info(V, "Worker instance(s) configuration set: {}", display);
+            LOG.info(V, "Worker instances set: {}", display);
         }
     }
 
@@ -315,49 +308,6 @@ public abstract class Configuration {
     public void setServerGroup(String serverGroup) {
         this.serverGroup = serverGroup.trim();
         LOG.info(V, "Server group set. ({})", this.serverGroup);
-    }
-
-    /**
-     * Return a list of cluster id. Currently used for termination intent only.
-     * @ToDo: Seems not the right place to store this information, since this is not part of a cluster configuration and only
-     *      * necessary for termination intent.
-     *
-     * @return Return a list of cluster id.
-     */
-    public String[] getClusterIds() {
-        return Arrays.copyOf(clusterIds, clusterIds.length);
-    }
-
-
-    /**
-     * Set the id of current
-     * @param id
-     */
-    public void setId(String id) {
-        this.id = id;
-
-    }
-
-    public String getId(){
-        return id;
-    }
-
-    /**
-     * Set the clusterid for termination intent either as a single cluster "id" or as multiple "id1/id2/id3".
-     * @ToDo: Seems not the right place to store this information, since this is not part of a cluster configuration and only
-     *      * necessary for termination intent.
-     */
-    public void setClusterIds(String clusterIds) {
-        this.clusterIds = clusterIds == null ? new String[0] : clusterIds.split("[/,]");
-    }
-
-    /**
-     * Set the clusterid for termination intent as cluster id list".
-     * @ToDo:  Seems not the right place to store this information, since this is not part of a cluster configuration and only
-     * necessary for termination intent.
-     */
-    public void setClusterIds(String[] clusterIds) {
-        this.clusterIds = clusterIds == null ? new String[0] : clusterIds;
     }
 
     public List<Port> getPorts() {
@@ -439,6 +389,22 @@ public abstract class Configuration {
         LOG.info(V, "NFS support {}.", nfs ? "enabled" : "disabled");
     }
 
+    public String getServiceCIDR() {
+        return serviceCIDR;
+    }
+
+    public void setServiceCIDR(String serviceCIDR) throws ConfigurationException{
+        LOG.warn("Overwriting CIDR mask settings might services be accessible for unauthorized instances/users. " +
+                "Make sure that you are know what are you doing.");
+        String pattern = "\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}/\\d{1,2}";
+        if (!serviceCIDR.matches(pattern)) {
+            String msg = String.format("Value '%s' of option serviceCIDR does not match pattern '%s'.", serviceCIDR, pattern);
+            LOG.error(msg);
+            throw new ConfigurationException(msg);
+        }
+        this.serviceCIDR = serviceCIDR;
+    }
+
     public boolean isOge() {
         return oge;
     }
@@ -500,34 +466,6 @@ public abstract class Configuration {
         LOG.info(V, "Debug requests {}.", debugRequests ? "enabled" : "disabled");
     }
 
-    public boolean isIDE() { return cloud9 || theia; }
-
-    public boolean isCloud9() {
-        return cloud9;
-    }
-
-    public void setCloud9(boolean cloud9) throws ConfigurationException {
-        if (cloud9&&theia) {
-            LOG.error("Only one IDE (either Theia or Cloud9) can be set.");
-            throw new ConfigurationException("Only one IDE (either Theia or Cloud9) can be set.");
-        }
-        this.cloud9 = cloud9;
-        LOG.info(V, "Cloud9 support {}.", cloud9 ? "enabled" : "disabled");
-    }
-
-    public boolean isTheia() {
-        return theia;
-    }
-
-    public void setTheia(boolean theia) throws ConfigurationException {
-        if (cloud9&&theia) {
-            LOG.error("Only one IDE (either Theia or Cloud9) can be set.");
-            throw new ConfigurationException("Only one IDE (either Theia or Cloud9) can be set.");
-        }
-        this.theia = theia;
-        LOG.info(V, "Theia support {}.", theia ? "enabled" : "disabled");
-    }
-
     public String getCredentialsFile() {
         return credentialsFile;
     }
@@ -536,25 +474,26 @@ public abstract class Configuration {
         this.credentialsFile = credentialsFile;
     }
 
+    @Deprecated
     public String getCloud9Workspace() {
         return getWorkspace();
     }
 
+    @Deprecated
     public void setCloud9Workspace(String cloud9Workspace) {
-        LOG.warn("Option cloud9Workspace is deprecated. Please use workspace instead.");
-        setWorkspace(cloud9Workspace);
+        LOG.warn("Option cloud9Workspace is deprecated. Please use attribute workspace in ideConf instead.");
+        ideConf.setWorkspace(cloud9Workspace);
     }
 
+    @Deprecated
     public String getWorkspace() {
-        return workspace;
+        return ideConf.getWorkspace();
     }
 
+    @Deprecated
     public void setWorkspace(String workspace) {
-        if (workspace == null || workspace.length() == 0) {
-            workspace = DEFAULT_WORKSPACE;
-        }
-        this.workspace = workspace;
-        LOG.info(V, "Workspace set: {}", workspace);
+        LOG.warn("Option workspace is deprecated. Please use attribute workspace in ideConf instead.");
+        ideConf.setWorkspace(workspace);
     }
 
     public boolean isLocalDNSLookup() {
@@ -565,12 +504,21 @@ public abstract class Configuration {
         this.localDNSLookup = localDNSLookup;
     }
 
+
     public boolean isSlurm() {
         return slurm;
     }
 
     public void setSlurm(boolean slurm) {
         this.slurm = slurm;
+    }
+
+    public SlurmConf getSlurmConf() {
+        return slurmConf;
+    }
+
+    public void setSlurmConf(SlurmConf slurmConf) {
+        this.slurmConf = slurmConf;
     }
 
     public String getMungeKey() {
@@ -587,7 +535,7 @@ public abstract class Configuration {
                 mungeKey = bytesToHex(digest.digest(randomarray));
             } catch (NoSuchAlgorithmException e){
                 LOG.warn("SHA-256 algorithm not found, proceed with unhashed munge key.");
-                mungeKey = new String(randomarray, Charset.forName("UTF-8"));
+                mungeKey = new String(randomarray, StandardCharsets.UTF_8);
             }
         }
         return mungeKey;
@@ -595,18 +543,6 @@ public abstract class Configuration {
 
     public void setMungeKey(String mungeKey) {
         this.mungeKey = mungeKey;
-    }
-
-    public boolean isGanglia() {
-        return ganglia;
-    }
-
-    public void setGanglia(boolean ganglia) {
-        this.ganglia = ganglia;
-        if (ganglia) {
-            LOG.warn("Ganglia (oge) support is deprecated (only supported using Ubuntu 16.04.) " +
-                     "and will be removed in the near future. Please use Zabbix instead.");
-        }
     }
 
     public boolean isZabbix() {
@@ -620,6 +556,14 @@ public abstract class Configuration {
     public ZabbixConf getZabbixConf() { return zabbixConf;}
 
     public void setZabbixConf(ZabbixConf zabbixConf) { this.zabbixConf =  zabbixConf;}
+
+    public boolean useHostnames() {
+        return useHostnames;
+    }
+
+    public void setUseHostnames(boolean useHostnames) {
+        this.useHostnames = useHostnames;
+    }
 
     public static class ZabbixConf {
         public ZabbixConf(){
@@ -685,10 +629,22 @@ public abstract class Configuration {
     public static class InstanceConfiguration {
         public InstanceConfiguration() {
         }
-
+        // @TODO should be unique
+        private String name;
         private String type;
         private String image;
         private InstanceType providerType;
+        private String network;
+        private String serverGroup;
+        private String securityGroup;
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
 
         public String getType() {
             return type;
@@ -712,6 +668,30 @@ public abstract class Configuration {
 
         public void setProviderType(InstanceType providerType) {
             this.providerType = providerType;
+        }
+
+        public String getNetwork() {
+            return network;
+        }
+
+        public void setNetwork(String network) {
+            this.network = network;
+        }
+
+        public String getServerGroup() {
+            return serverGroup;
+        }
+
+        public void setServerGroup(String serverGroup) {
+            this.serverGroup = serverGroup;
+        }
+
+        public String getSecurityGroup() {
+            return securityGroup;
+        }
+
+        public void setSecurityGroup(String securityGroup) {
+            this.securityGroup = securityGroup;
         }
     }
 
@@ -769,7 +749,8 @@ public abstract class Configuration {
     }
 
 
-    /** private helper class that converts a byte array to an Hex String
+    /**
+     * private helper class that converts a byte array to an Hex String.
      *
      * @param hash
      * @return
@@ -784,23 +765,10 @@ public abstract class Configuration {
         return hexString.toString();
     }
 
-    public Properties getOgeConf() {
-        return ogeConf;
-    }
-
-    /**
-     * Saves given values to ogeConf Properties.
-     * @param ogeConf Properties
-     */
-    public void setOgeConf(Properties ogeConf) {
-        for (String key : ogeConf.stringPropertyNames()) {
-            this.ogeConf.setProperty(key, ogeConf.getProperty(key));
-        }
-    }
-
     /**
      * Provides support for GridEngine global configuration.
      */
+    @Deprecated
     public static class OgeConf extends Properties {
         public static final String GRIDENGINE_FILES = "/playbook/roles/master/files/gridengine/";
         public static final String GLOBAL_OGE_CONF = GRIDENGINE_FILES + "global.conf";
@@ -820,6 +788,118 @@ public abstract class Configuration {
                 e.printStackTrace();
                 return null;
             }
+        }
+    }
+
+    public boolean isIDE() {
+        if (ideConf == null) {
+            return false;
+        }
+        return ideConf.ide;
+    }
+
+    public IdeConf getIdeConf() {
+        return ideConf;
+    }
+
+    public void setIdeConf(IdeConf ideConf) {
+        this.ideConf = ideConf;
+    }
+
+    /**
+     * Configuration of IDE.
+     * port_start is the port used for the first connection.
+     * If there are multiple users on the same server, ports will be incremented until port_end
+     */
+    public static class IdeConf {
+        private boolean ide = false;
+        private String workspace = IdeIntent.DEFAULT_IDE_WORKSPACE;
+        private int port_start = IdeIntent.DEFAULT_IDE_PORT;
+        private int port_end = IdeIntent.DEFAULT_IDE_PORT_END;
+        private boolean build = false;
+
+        public boolean isIde() {
+            return ide;
+        }
+
+        public void setIde(boolean ide) {
+            this.ide = ide;
+            LOG.info(V, "Theia support {}.", ide ? "enabled" : "disabled");
+        }
+
+        public String getWorkspace() {
+            return workspace;
+        }
+
+        public void setWorkspace(String workspace) {
+            if (workspace == null || workspace.length() == 0) {
+                workspace = IdeIntent.DEFAULT_IDE_WORKSPACE;
+            }
+            this.workspace = workspace;
+        }
+
+        public int getPort_start() {
+            return port_start;
+        }
+
+        public void setPort_start(int port_start) {
+            this.port_start = port_start;
+        }
+
+        public int getPort_end() {
+            return port_end;
+        }
+
+        public void setPort_end(int port_end) {
+            this.port_end = port_end;
+        }
+
+        public boolean isBuild() {
+            return build;
+        }
+
+        public void setBuild(boolean build) {
+            this.build = build;
+            LOG.info(V,"build Theia from source : {}", build ? "enabled" : "disabled");
+        }
+    }
+
+    /**
+     * Configuration of Slurm.
+     * Currently, all values are hard-coded.
+     */
+    public static class SlurmConf {
+        private boolean slurm = true;
+        private String database = "slurm";
+        private String db_user = "slurm";
+        private String db_password = "changeme";
+
+        public boolean isSlurm() {
+            return slurm;
+        }
+
+        public String getDatabase() {
+            return database;
+        }
+
+        public void setDatabase(String database) {
+            this.database = database;
+        }
+
+        public String getDb_user() {
+            return db_user;
+        }
+
+        public void setDb_user(String db_user) {
+            this.db_user = db_user;
+        }
+
+        public String getDb_password() {
+            return db_password;
+        }
+
+        public void setDb_password(String db_password) {
+            this.db_password = db_password;
         }
     }
 
@@ -903,12 +983,7 @@ public abstract class Configuration {
                 this.hosts = "worker";
                 return;
             }
-            if (hosts.equals("all") || hosts.equals("worker") || hosts.equals("master")) {
-                this.hosts = hosts;
-                return;
-            }
-            LOG.error("Unsupported value '{}' for ansibleRoles.hosts.",hosts);
-            this.hosts = "unsupported";
+            this.hosts = hosts;
         }
 
         public Map<String, Object> getVars() {
@@ -1033,6 +1108,7 @@ public abstract class Configuration {
      * Representation of a SSH Cluster KeyPair.
      */
     public static class ClusterKeyPair {
+        private static final String KEY_FILE = KEYS_DIR + System.getProperty("file.separator");
 
         private String privateKey;
         private String publicKey;
@@ -1054,20 +1130,10 @@ public abstract class Configuration {
             this.publicKey = publicKey;
         }
 
-        /**
-         * Return the name of the keypair
-         *
-         * @return
-         */
         public String getName() {
             return name;
         }
 
-        /**
-         * Set the name of the keypair.
-         *
-         * @param name
-         */
         public void setName(String name) {
             this.name = name;
         }
@@ -1075,25 +1141,33 @@ public abstract class Configuration {
         /**
          *  Store public AND private key in Configuration.KEY_DIR as name[.pub].
          *
-         * @throws IOException
+         * @throws IOException failure in writing key file
          */
         public void store() throws IOException {
             // private key
             try {
-                Path p = Paths.get(KEYS_DIR + System.getProperty("file.separator") + name);
-                Files.createFile(p, KEYS_PERMS);
-                OutputStream fout = Files.newOutputStream(p);
-                fout.write(privateKey.getBytes());
-                fout.close();
+                Path p = Paths.get(KEY_FILE + name);
+                if (!Files.exists(p)) {
+                    Files.createFile(p, KEYS_PERMS);
+                    OutputStream fout = Files.newOutputStream(p);
+                    fout.write(privateKey.getBytes());
+                    fout.close();
+                } else {
+                    LOG.info("Private KeyPair File already exists. Continuing ...");
+                }
             } catch (IOException e){
                 throw new IOException("Error writing private key :"+e.getMessage(),e);
             }
             // public key
             try {
-                Path p = Paths.get(KEYS_DIR + System.getProperty("file.separator") + name + ".pub");
-                OutputStream fout = Files.newOutputStream(p);
-                fout.write(publicKey.getBytes());
-                fout.close();
+                Path p = Paths.get(KEY_FILE + name + ".pub");
+                if (!Files.exists(p)) {
+                    OutputStream fout = Files.newOutputStream(p);
+                    fout.write(publicKey.getBytes());
+                    fout.close();
+                } else {
+                    LOG.info("Public KeyPair File already exists. Continuing ...");
+                }
             } catch (IOException e) {
                 throw new IOException("Error writing public key :"+e.getMessage(),e);
             }
@@ -1102,7 +1176,7 @@ public abstract class Configuration {
         /**
          * Load public and private key from Configuration.KEYS_DIR.
          *
-         * @throws IOException
+         * @throws IOException failure in loading key file
          */
         public void load() throws IOException {
             //private key

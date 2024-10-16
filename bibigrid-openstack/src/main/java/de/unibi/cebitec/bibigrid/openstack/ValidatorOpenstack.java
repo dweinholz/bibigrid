@@ -16,16 +16,31 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Openstack specific implementation for a validator
+ * Openstack specific implementation for a validator.
  *
- * @author mfriedrichs(at)techfak.uni-bielefeld.de, t.dilger(at)uni-bielefeld.de, jkrueger(at)cebitec.uni-bielefeld.de
+ * @author mfriedrichs(at)techfak.uni-bielefeld.de,
+ * t.dilger(at)uni-bielefeld.de,
+ * jkrueger(at)cebitec.uni-bielefeld.de
  */
 public final class ValidatorOpenstack extends Validator {
     private final ConfigurationOpenstack openstackConfig;
 
-    ValidatorOpenstack(final Configuration config, final ProviderModule providerModule)
+    public enum EnvCredentials {
+        OS_PROJECT_NAME,
+        OS_PROJECT_ID,
+        OS_USER_DOMAIN_NAME,
+        OS_USER_DOMAIN_ID,
+        OS_PROJECT_DOMAIN_NAME,
+        OS_PROJECT_DOMAIN_ID,
+        OS_AUTH_URL,
+        OS_PASSWORD,
+        OS_USERNAME,
+        OS_REGION_NAME
+    }
+
+    public ValidatorOpenstack(final Configuration config, final ProviderModule providerModule)
             throws ConfigurationException {
-        super( config, providerModule);
+        super(config, providerModule);
         openstackConfig = (ConfigurationOpenstack) config;
     }
 
@@ -39,70 +54,108 @@ public final class ValidatorOpenstack extends Validator {
         return null;
     }
 
+    /**
+     * Loads credentials.yml or environment variables set via sourced RC file.
+     * @return true, if credentials loaded successfully
+     */
     @Override
-    protected boolean validateProviderParameters() {
-        return loadAndparseCredentialParameters();
+    public boolean validateProviderParameters() {
+        OpenStackCredentials openStackCredentials;
+        String path = config.getCredentialsFile();
+        if (path != null) {
+            openStackCredentials = loadCredentialsFile(path);
+        } else {
+            LOG.info("No credentials file provided. Checking environment variables ...");
+            openStackCredentials = loadEnvCredentials();
+        }
+        if (openStackCredentials == null) {
+            LOG.error("No or incomplete credentials provided. Please use a credentials file or source the OpenStack RC file.");
+            return false;
+        }
+        LOG.info("Set OpenStack Credentials ...");
+        openstackConfig.setOpenstackCredentials(openStackCredentials);
+        return true;
     }
 
-    private boolean loadAndparseCredentialParameters() {
+    /**
+     * Loads credentials file and checks, if every parameter has been set.
+     * @return openStackCredentials if parameters given, otherwise null
+     */
+    private OpenStackCredentials loadCredentialsFile(String path) {
+        try {
+            File credentialsFile = Paths.get(path).toFile();
+            OpenStackCredentials openStackCredentials =  new Yaml().loadAs(new FileInputStream(credentialsFile), OpenStackCredentials.class);
+            LOG.info("Found valid credentials file ({}).", credentialsFile.getAbsolutePath());
+            return validateCredentials(openStackCredentials) ? openStackCredentials : null;
+        } catch (FileNotFoundException e) {
+            LOG.error("Failed to locate openstack credentials file.", e);
+            return null;
+        } catch (YAMLException e) {
+            LOG.error("Failed to parse openstack credentials file. {}",
+                    e.getCause() != null ? e.getCause().getMessage() : e);
+            return null;
+        }
+    }
 
-        OpenStackCredentials openStackCredentials = null;
+    /**
+     * Loads environment variables.
+     * @return openStackCredentials if parameters given, otherwise null
+     */
+    public OpenStackCredentials loadEnvCredentials() {
+        Map env =  System.getenv();
+        OpenStackCredentials openStackCredentials = new OpenStackCredentials();
 
-        // if credentials is given, read it ...
-        if (config.getCredentialsFile() != null) {
-            try {
-                File credentialsFile = Paths.get(config.getCredentialsFile()).toFile();
-                openStackCredentials =  new Yaml().loadAs(new FileInputStream(credentialsFile), OpenStackCredentials.class);
-
-            } catch (FileNotFoundException e) {
-                LOG.error("Failed to locate openstack credentials file.", e);
-            } catch (YAMLException e) {
-                LOG.error("Failed to parse openstack credentials file. {}",
-                        e.getCause() != null ? e.getCause().getMessage() : e);
-            }
-        } else {
-            // ... otherwise try to extract necessary informations from environment
-            openStackCredentials = new OpenStackCredentials();
-
-            Map env =  System.getenv();
-
-            if (env.containsKey("OS_PROJECT_NAME")){
-                openStackCredentials.setProjectName((String)env.get("OS_PROJECT_NAME"));
-            }
-            if (env.containsKey("OS_USER_DOMAIN_NAME")){
-                openStackCredentials.setDomain((String)env.get("OS_USER_DOMAIN_NAME"));
-            }
-            if (env.containsKey("OS_PROJECT_DOMAIN_NAME")){
-                openStackCredentials.setProjectDomain((String)env.get("OS_PROJECT_DOMAIN_NAME"));
-            }
-
-            if (env.containsKey("OS_AUTH_URL")){
-                openStackCredentials.setEndpoint((String)env.get("OS_AUTH_URL"));
-            }
-            if (env.containsKey("OS_PASSWORD")){
-                openStackCredentials.setPassword((String)env.get("OS_PASSWORD"));
-            }
-            if (env.containsKey("OS_USERNAME")){
-                openStackCredentials.setUsername((String)env.get("OS_USERNAME"));
-            }
-
+        // Project[name]
+        if (env.containsKey(EnvCredentials.OS_PROJECT_NAME.name())) {
+            openStackCredentials.setProject((String)env.get(EnvCredentials.OS_PROJECT_NAME.name()));
+        }
+        // Project Id
+        if (env.containsKey(EnvCredentials.OS_PROJECT_ID.name())) {
+            openStackCredentials.setProjectId((String)env.get(EnvCredentials.OS_PROJECT_ID.name()));
         }
 
-        if (openStackCredentials == null) {
-            LOG.error("Openstack credentials missing (file or environment).");
+        // User Domain
+        if (env.containsKey(EnvCredentials.OS_USER_DOMAIN_NAME.name())) {
+            openStackCredentials.setUserDomain((String)env.get(EnvCredentials.OS_USER_DOMAIN_NAME.name()));
+        }
+
+        // User Domain Id
+        if (env.containsKey(EnvCredentials.OS_USER_DOMAIN_ID.name())) {
+            openStackCredentials.setUserDomainId((String)env.get(EnvCredentials.OS_USER_DOMAIN_ID.name()));
+        }
+
+        // Project Domain
+        if (env.containsKey(EnvCredentials.OS_PROJECT_DOMAIN_NAME.name())) {
+            openStackCredentials.setProjectDomain((String)env.get(EnvCredentials.OS_PROJECT_DOMAIN_NAME.name()));
+        }
+
+        // Project Domain Id
+        if (env.containsKey(EnvCredentials.OS_PROJECT_DOMAIN_ID.name())) {
+            openStackCredentials.setProjectDomainId((String)env.get(EnvCredentials.OS_PROJECT_DOMAIN_ID.name()));
+        }
+
+        // Region
+        if (env.containsKey(EnvCredentials.OS_REGION_NAME.name())) {
+            openStackCredentials.setRegion((String)env.get(EnvCredentials.OS_REGION_NAME.name()));
+        }
+
+        openStackCredentials.setEndpoint((String)env.get(EnvCredentials.OS_AUTH_URL.name()));
+        openStackCredentials.setPassword((String)env.get(EnvCredentials.OS_PASSWORD.name()));
+        openStackCredentials.setUsername((String)env.get(EnvCredentials.OS_USERNAME.name()));
+        return validateCredentials(openStackCredentials) ? openStackCredentials : null;
+    }
+
+    private boolean validateCredentials(OpenStackCredentials openStackCredentials){
+        if (openStackCredentials.getProject() == null && openStackCredentials.getProjectId() == null) {
+            LOG.error("Openstack credentials : Missing 'project' or 'projectId' parameter!");
             return false;
         }
-
-        if (openStackCredentials.getDomain() == null) {
-            LOG.error("Openstack credentials : Missing 'domain' parameter!");
+        if (openStackCredentials.getUserDomain() == null && openStackCredentials.getUserDomainId() == null) {
+            LOG.error("Openstack credentials : Missing 'userDomain' or 'userDomainId' parameter!");
             return false;
         }
-        if (openStackCredentials.getProjectDomain() == null) {
-            LOG.error("Openstack credentials : Missing 'projectDomain' parameter!");
-            return false;
-        }
-        if (openStackCredentials.getProjectName() == null) {
-            LOG.error("Openstack credentials : Missing 'projectName' parameter!");
+        if (openStackCredentials.getProjectDomain() == null && openStackCredentials.getProjectDomainId() == null) {
+            LOG.error("Openstack credentials : Missing 'projectDomain' or 'projectDomainId' parameter!");
             return false;
         }
         if (openStackCredentials.getEndpoint() == null) {
@@ -117,9 +170,9 @@ public final class ValidatorOpenstack extends Validator {
             LOG.error("Openstack credentials : Missing 'password' parameter!");
             return false;
         }
-
-        openstackConfig.setOpenstackCredentials(openStackCredentials);
-
+        if (openStackCredentials.getRegion() == null) {
+            LOG.error("Openstack credentials: Missing 'region' parameter");
+        }
         return true;
 
     }

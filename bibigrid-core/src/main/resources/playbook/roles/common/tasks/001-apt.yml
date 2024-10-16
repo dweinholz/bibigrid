@@ -1,25 +1,38 @@
 - name: Debian based system
   debug:
-    msg : Using apt to install packages
+    msg: Using apt to install packages
 
+- name: Unlock Ubuntu User for SimpleVM Resenv Cluster
+  ansible.builtin.user:
+    name: ubuntu
+    password_lock: false
 
-- name: Deactivate auto-update function
-  shell: |
-        systemctl stop apt-daily.service
-        systemctl disable apt-daily.service
-        systemctl stop apt-daily.timer
-        systemctl disable apt-daily.timer
-        systemctl kill --kill-who=all apt-daily.service
-        if [ $? -eq 0 ]; then
-          while ! (systemctl list-units --all apt-daily.service | fgrep -q dead)
-          do
-            sleep 1;
-          done
-        fi
+- name: Disable auto-update/upgrade during ansible-run
+  copy:
+    src: disable-auto-upgrades.conf
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Populate service facts
+  ansible.builtin.service_facts:
+
+- name: Wait till Apt_Mirror de.NBI Bielefeld Service is done
+  ansible.builtin.service_facts:
+  until: services['de.NBI_Bielefeld_environment.service'].state == 'stopped'
+  retries: 65
+  delay: 10
+  when: services['de.NBI_Bielefeld_environment.service'] is defined
+
+- name: Update
+  apt:
+    update_cache: "yes"
+    upgrade: "yes"
 
 - name: Install common packages
   apt:
-    name: ["apt-transport-https","ca-certificates","curl","software-properties-common","python3-pip"]
+    name: ["apt-transport-https","ca-certificates","curl","software-properties-common","python3-pip","python3-setuptools"]
     state: "present"
 
 - name: Install OpenStack object store client
@@ -29,52 +42,55 @@
   when: mode == "openstack"
 
 # https://cloud.google.com/storage/docs/gsutil_install?hl=de#deb
-- name: Add Google Compute repository key
-  shell: 'curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -'
-  when: mode == "googlecloud"
+- block:
+    - name: Add Google Compute repository key
+      shell: 'curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -'
 
-- name: Add Google Compute repositories
-  apt_repository:
-    repo: "deb http://packages.cloud.google.com/apt cloud-sdk-{{ ansible_lsb.codename }} main"
-    state: present
-  when: mode == "googlecloud"
+    - name: Add Google Compute repository
+      apt_repository:
+        repo: "deb http://packages.cloud.google.com/apt cloud-sdk-{{ ansible_lsb.codename }} main"
+        state: present
+      register: google_repo
 
-- name: Update apt cache for Google Compute
-  apt:
-    update_cache: 'yes'
+    - name: Update apt cache for Google Compute
+      apt:
+        update_cache: 'yes'
+      when: google_repo is changed
 
-- name: Install Google Compute object store client
-  apt:
-    name: "google-cloud-sdk"
-    state: "present"
+    - name: Install Google Compute object store client
+      apt:
+        name: "google-cloud-sdk"
+        state: "present"
+
   when: mode == "googlecloud"
 
 # https://docs.microsoft.com/en-us/cli/azure/install-azure-cli-apt?view=azure-cli-latest
-- name: Add Azure repository key
-  apt_key:
-    id: 52E16F86FEE04B979B07E28DB02C46DF417A0893
-    keyserver: packages.microsoft.com
-    state: present
-  when: mode == "azure"
+- block:
+    - name: Add Azure repository key
+      apt_key:
+        id: 52E16F86FEE04B979B07E28DB02C46DF417A0893
+        keyserver: packages.microsoft.com
+        state: present
 
-- name: Add new Azure repository key
-  shell: 'curl -L https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -'
-  when: mode == "azure"
+    - name: Add new Azure repository key
+      shell: 'curl -L https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -'
 
-- name: Add Azure repositories
-  apt_repository:
-    repo: "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ {{ ansible_lsb.codename }} main"
-    state: present
-  when: mode == "azure"
+    - name: Add Azure repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ {{ ansible_lsb.codename }} main"
+        state: present
+      register: azure_repo
 
-- name: Update apt cache for Azure
-  apt:
-    update_cache: 'yes'
+    - name: Update apt cache for Azure
+      apt:
+        update_cache: 'yes'
+      when: azure_repo is changed
 
-- name: Install Azure object store client
-  apt:
-    name: "azure-cli"
-    state: "present"
+    - name: Install Azure object store client
+      apt:
+        name: "azure-cli"
+        state: "present"
+
   when: mode == "azure"
 
 # https://docs.aws.amazon.com/cli/latest/userguide/installing.html
@@ -94,11 +110,17 @@
     repo: 'deb https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_lsb.codename}} stable'
     state: present
 
-- name: Add zabbix repositories
-  apt:
-    deb: 'https://repo.zabbix.com/zabbix/4.0/{{ ansible_distribution | lower }}/pool/main/z/zabbix-release/zabbix-release_4.0-2+{{ ansible_distribution_release }}_all.deb'
+- name: Add apt.bi.denbi.de repository key
+  apt_key:
+    url: 'https://apt.bi.denbi.de/repo_key.key'
     state: present
+
+- name: Add apt.bi.denbi.de repository
+  apt_repository:
+    repo: 'deb https://apt.bi.denbi.de/repos/apt/{{ ansible_distribution_release | lower }} {{ ansible_distribution_release | lower }} main'
 
 - name: Update apt cache
   apt:
+    upgrade: 'yes'
     update_cache: 'yes'
+    cache_valid_time: 86400 #One day

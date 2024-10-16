@@ -31,7 +31,7 @@ public final class InstanceOpenstack extends Instance {
         this.server = server;
     }
 
-    Server getInternal() {
+    public Server getInternal() {
         return server;
     }
 

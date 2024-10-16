@@ -1,6 +1,10 @@
 package de.unibi.cebitec.bibigrid.core.model;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -9,11 +13,13 @@ import java.util.List;
  *
  * @author Jan Krueger - jkrueger(at)cebitec.uni-bielefeld.de
  */
-public class Cluster {
+public class Cluster implements Comparable<Cluster> {
+    private static final Logger LOG = LoggerFactory.getLogger(Cluster.class);
     private final String clusterId;
 
     private Instance masterInstance;
     private List<Instance> workerInstances = new ArrayList<>();
+    private List<Instance> deletedInstances = new ArrayList<>();
 
     private Network network;
     private Subnet subnet;
@@ -25,6 +31,8 @@ public class Cluster {
     private String securityGroup;
     private String keyName;
     private String user;
+
+    private String availabilityZone;
 
     private String started;
 
@@ -41,6 +49,7 @@ public class Cluster {
     }
 
     public void setMasterInstance(Instance masterInstance) {
+        masterInstance.setMaster(true);
         this.masterInstance = masterInstance;
     }
 
@@ -68,16 +77,67 @@ public class Cluster {
         this.securityGroup = securityGroup;
     }
 
+    /**
+     * Returns a orderd list of worker instances
+     * @return ordered list of worker instances
+     */
     public List<Instance> getWorkerInstances() {
+        Collections.sort(workerInstances);
         return workerInstances;
     }
 
-    public void setWorkerInstances(List<Instance> workerInstances) {
-        this.workerInstances = workerInstances;
+    /**
+     * Returns a ordered list of worker instances of given batch.
+     * @param batchIndex idx of worker configuration
+     * @return ordered list of instances of specified worker configuration idx
+     */
+    public List<Instance> getWorkerInstances(int batchIndex) {
+        List<Instance> workers = new ArrayList<>();
+        for (Instance worker : getWorkerInstances()) {
+            if (worker.getBatchIndex() == batchIndex) {
+                workers.add(worker);
+            }
+        }
+        Collections.sort(workerInstances);
+        return workers;
     }
 
+    public void setWorkerInstances(List<Instance> instances) {
+        this.workerInstances = instances;
+    }
+
+    /**
+     * Todo doc
+     * @param instances
+     */
+    public void addWorkerInstances(List<Instance> instances) {
+        for (Instance instance : instances) {
+            this.addWorkerInstance(instance);
+        }
+    }
+
+    /**
+     * Todo doc
+     * @param instance
+     */
     public void addWorkerInstance(Instance instance) {
         workerInstances.add(instance);
+    }
+
+    /**
+     * Todo doc
+     * @param instance
+     */
+    public void removeWorkerInstance(Instance instance) {
+        workerInstances.remove(instance);
+    }
+
+    public List<Instance> getDeletedInstances() {
+        return deletedInstances;
+    }
+
+    public void setDeletedInstances(List<Instance> deletedInstances) {
+        this.deletedInstances = deletedInstances;
     }
 
     public String getKeyName() {
@@ -121,10 +181,33 @@ public class Cluster {
     }
 
     public String getPrivateIp() {
-        return publicIp;
+
+        return privateIp;
     }
 
-    public void setPrivateIp(String publicIp) {
-        this.publicIp = publicIp;
+    public void setPrivateIp(String privateIp) {
+        this.privateIp = privateIp;
+    }
+
+    public String getAvailabilityZone() {
+        return availabilityZone;
+    }
+
+    public void setAvailabilityZone(String availabilityZone) {
+        this.availabilityZone = availabilityZone;
+    }
+
+    /**
+     * Clusters should be sorted by user name, following launch (started).
+     * @param cluster other cluster to compare with this
+     * @return negative, equal or positive when less than, equal to, or greater than the other clusters values
+     */
+    @Override
+    public int compareTo(Cluster cluster) {
+        if (user.equals(cluster.getUser())) {
+            return started.compareTo(cluster.getStarted());
+        } else {
+            return user.compareTo(cluster.getUser());
+        }
     }
 }

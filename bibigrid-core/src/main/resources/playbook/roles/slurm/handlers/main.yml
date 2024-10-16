@@ -1,0 +1,28 @@
+- name: slurmdbd
+  systemd:
+    name: slurmdbd
+    state: restarted
+    enabled: true
+    masked: false
+
+- name: slurmrestd
+  systemd:
+    name: slurmrestd
+    state: restarted
+    enabled: true
+    masked: false
+    daemon_reload: yes
+
+- name: slurmctld
+  systemd:
+    name: slurmctld
+    enabled: true
+    masked: false
+    state: restarted
+
+- name: slurmd
+  systemd:
+    name: slurmd
+    enabled: true
+    masked: false
+    state: restarted

@@ -2,14 +2,16 @@ package de.unibi.cebitec.bibigrid.core.util;
 
 import com.jcraft.jsch.*;
 
-import java.io.Console;
+import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Scanner;
 
+
+import de.unibi.cebitec.bibigrid.core.intents.CreateCluster;
 import de.unibi.cebitec.bibigrid.core.model.Configuration;
+import de.unibi.cebitec.bibigrid.core.model.exceptions.ConfigurationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,13 +19,14 @@ import static de.unibi.cebitec.bibigrid.core.util.VerboseOutputFilter.V;
 
 public class SshFactory {
     private static final Logger LOG = LoggerFactory.getLogger(SshFactory.class);
-    private static final int SSH_POLL_ATTEMPTS = 25;
+    private static final int SSH_POLL_ATTEMPTS = 50;
 
-    public static Session createSshSession(Configuration config, String ip) throws JSchException{
+    public static Session createSshSession(String sshUser, Configuration.ClusterKeyPair ckp, String ip) throws JSchException{
         JSch jssh = new JSch();
         JSch.setLogger(new JSchLogger());
-        Session sshSession = jssh.getSession(config.getSshUser(), ip, 22);
-        Configuration.ClusterKeyPair ckp = config.getClusterKeyPair();
+        Session sshSession = jssh.getSession(sshUser, ip, 22);
+        // config.getSshUser()
+        //Configuration.ClusterKeyPair ckp = config.getClusterKeyPair();
         jssh.addIdentity(ckp.getName(),ckp.getPrivateKey().getBytes(),ckp.getPublicKey().getBytes(),null);
         UserInfo userInfo = getConsolePasswordUserInfo();
         sshSession.setUserInfo(userInfo);
@@ -101,11 +104,145 @@ public class SshFactory {
                 LOG.error(V, "Poll SSH {}", ex.getMessage());
             }
             try {
-                Thread.sleep(2000);
+                Thread.sleep(4000);
             } catch (InterruptedException ignored) {
             }
         }
         LOG.error("Master instance SSH port is not reachable.");
         return false;
+    }
+
+    /**
+     * Executes a script on remote.
+     *
+     * @param sshSession transfer via ssh session
+     * @param script to be executed (must be a shell/bash script)
+
+     * @throws JSchException ssh openChannel exception
+     * @throws IOException BufferedReader exceptions
+     * @throws ConfigurationException if configuration was unsuccesful
+     */
+    public static void executeScript(final Session sshSession, String script)
+            throws IOException, JSchException, ConfigurationException {
+
+        // Add line to script to identify if script was run successfully.
+        // This is necessary when running e.g. ansible within the script.
+        // Ansible always terminates with error code 0, even if ansible
+        // run fails.
+        script = script + "\nif [ $? == 0 ]; then echo CONFIGURATION FINISHED; else echo CONFIGURATION FAILED; fi\n";
+
+        LOG.info("Your cloud instance(s) will be configured now. This might take a while.");
+
+        ChannelExec channel = (ChannelExec) sshSession.openChannel("exec");
+
+        LineReaderRunnable stdout = new LineReaderRunnable(channel.getInputStream(), true);
+        LineReaderRunnable stderr = new LineReaderRunnable(channel.getErrStream(), false);
+
+        // Create threads ...
+        Thread t_stdout = new Thread(stdout);
+        Thread t_stderr = new Thread(stderr);
+
+        // ... start them ...
+        t_stdout.start();
+        t_stderr.start();
+
+        // ... start ansible ...
+        channel.setCommand(script);
+        // ... connect channel
+        channel.connect();
+
+        // ... wait for threads finished ...
+        try {
+            t_stdout.join();
+            t_stderr.join();
+        } catch (InterruptedException e) {
+            throw new ConfigurationException("Exception occurred during evaluation of ansible output!");
+        }
+
+        // and  disconnect channel
+        channel.disconnect();
+
+        if (stdout.getReturnCode() != 0) {
+            throw new ConfigurationException("Cluster configuration failed.\n" + stdout.getReturnMsg());
+        }
+    }
+}
+
+/**
+ * Watch and parse the stdout and stderr stream at the same time.
+ * Since BufferReader.readline() blocks,
+ * the only solution I found is to work with separate threads for stdout and stderror of the ssh channel.
+ *
+ * The following code snipset seems to be more complicated than it should be (in other languages).
+ * If you find a better solution feel free to replace it.
+ */
+class LineReaderRunnable implements Runnable {
+    private static final Logger LOG = LoggerFactory.getLogger(CreateCluster.class);
+    private static final String LOG_MSG_BG = "\"[BIBIGRID] ";
+
+    private BufferedReader br;
+
+    private boolean regular;
+
+    private int returnCode = -1;
+    private String returnMsg = "";
+
+    /**
+     * Initializes new Runnable with input / error stream.
+     * @param stream InputStream with regular and error Logging
+     * @param regular true, if regular stream, false, if error stream
+     */
+    LineReaderRunnable(InputStream stream, boolean regular) {
+        this.br = new BufferedReader(new InputStreamReader(stream));
+        this.regular = regular;
+    }
+
+    private void work_on_line(String line) {
+        if (line.isEmpty()) {
+            return;
+        }
+        if (regular) {
+            if (line.contains("CONFIGURATION FINISHED")) {
+                returnCode = 0;
+                returnMsg = ""; // clear possible msg
+            } else if (line.contains("failed:")) {
+                returnMsg = line;
+            }
+                LOG.info(V, "{}", line);
+
+
+        } else {
+            // Check for real errors and print them to the error log ...
+            if (line.toLowerCase().contains("ERROR".toLowerCase())) {
+                LOG.error("{}", line);
+            } else { // ... and everything else as warning !
+                LOG.warn(V,"{}",line);
+            }
+        }
+    }
+
+    private void work_on_exception(Exception e) {
+        LOG.error("Evaluate stderr : " + e.getMessage());
+        returnCode = 1;
+    }
+
+    @Override
+    public void run() {
+        try {
+            String line;
+            while ((line = br.readLine()) != null ) {
+                work_on_line(line);
+            }
+        } catch (IOException ex) {
+            work_on_exception(ex);
+        }
+    }
+
+    int getReturnCode(){
+        return returnCode;
+    }
+
+    String getReturnMsg(){
+        return returnMsg;
     }
 }

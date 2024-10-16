@@ -1,17 +1,15 @@
 package de.unibi.cebitec.bibigrid.core.util;
 
 import de.unibi.cebitec.bibigrid.core.model.Configuration;
-import de.unibi.cebitec.bibigrid.core.model.*;
-
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
+import de.unibi.cebitec.bibigrid.core.model.Instance;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +27,9 @@ public final class ShellScriptCreator {
         // redirect output
         userData.append("exec > /var/log/userdata.log\n");
         userData.append("exec 2>&1\n");
+        // disableUpgrades
+        // appendDisableAptDailyService(userData);
+        appendDisableUpgrades(userData);
         // source shell configuration
         userData.append("source /home/").append(config.getSshUser()).append("/.bashrc\n");
         // simple log function
@@ -45,9 +46,6 @@ public final class ShellScriptCreator {
         userData.append("log \"set hostname\"\n");
         userData.append("hostname -b $(iplookup $localip)\n");
         userData.append("fi\n");
-        // disableAptDailyService
-        userData.append("log \"disable apt-daily.(service|timer)\"\n");
-        appendDisableAptDailyService(userData);
         // configure SSH Config
         userData.append("log \"configure ssh\"\n");
         appendSshConfiguration(config, userData);
@@ -58,18 +56,11 @@ public final class ShellScriptCreator {
     }
 
 
-    private static void appendDisableAptDailyService(StringBuilder userData) {
-        userData.append("systemctl stop apt-daily.service\n" +
-                "systemctl disable apt-daily.service\n" +
-                "systemctl stop apt-daily.timer\n" +
-                "systemctl disable apt-daily.timer\n" +
-                "systemctl kill --kill-who=all apt-daily.service\n" +
-                "if [ $? -eq 0 ]; then \n" +
-                "while ! (systemctl list-units --all apt-daily.service | fgrep -q dead)\n" +
-                "do\n" +
-                "  sleep 1;\n" +
-                "done\n" +
-                "fi\n");
+    private static void appendDisableUpgrades(StringBuilder userData){
+        userData.append("echo > /etc/apt/apt.conf.d/20auto-upgrades << \"END\"\n" +
+                "APT::Periodic::Update-Package-Lists \"0\";\n" +
+                "APT::Periodic::Unattended-Upgrade \"0\";\n" +
+                "END\n");
     }
 
     private static void appendSshConfiguration(Configuration config, StringBuilder userData) {
@@ -81,9 +72,8 @@ public final class ShellScriptCreator {
         userData.append("chmod 600 ").append(userSshPath).append("id_rsa\n");
 
         // place *all* additional public keys within authorized keys
-        List<String> pks = new ArrayList<>();
-               // public keys
-        pks.addAll(config.getSshPublicKeys());
+        // public keys
+        List<String> pks = new ArrayList<>(config.getSshPublicKeys());
         // public key files
         List<String> pkfs = new ArrayList<>(config.getSshPublicKeyFiles());
         if (config.getSshPublicKeyFile() != null) {
@@ -126,12 +116,13 @@ public final class ShellScriptCreator {
 
     /**
      * Builds script to configure ansible and execute ansible commands to install (galaxy) roles / playbooks.
-     * @param prepare true, if still preparation necessary
      * @param config Configuration
      * @return script String to execute in CreateCluster
      */
-    public static String getMasterAnsibleExecutionScript(final boolean prepare, final Configuration config) {
+    public static String getMasterAnsibleExecutionScript(final Configuration config) {
         StringBuilder script = new StringBuilder();
+        // wait until /var/lib/dpkg/lock is not locked by apt/dpkg
+        script.append("while sudo lsof /var/lib/dpkg/lock 2> null; do echo \"/var/lib/dpkg/lock locked - wait for 10 seconds\"; sleep 10; done;\n");
         // apt-get update
         script.append("sudo apt-get update | sudo tee -a /var/log/ssh_exec.log\n");
         // install python3
@@ -151,14 +142,20 @@ public final class ShellScriptCreator {
         script.append("ansible workers -i ~/" + AnsibleResources.HOSTS_CONFIG_FILE
                 + " --become -m raw -a \"apt-get update && apt-get --yes install python3\" | sudo tee -a /var/log/ansible.log\n");
 
+        // Test ansible
+        script.append("echo \"Testing Ansible...\n\";");
+        script.append("ansible -i ~/" + AnsibleResources.HOSTS_CONFIG_FILE + " all -m ping | sudo tee -a /var/log/ansible.log \n");
+        script.append("if [ $? -eq 0 ]; then echo \"Ansible configuration seems to work properly.\"; else echo\"Ansible hosts not reachable. " +
+                "There seems to be a misconfiguration.\"; fi\n");
+
         // Run ansible-galaxy to install ansible-galaxy roles from galaxy, git or url (.tar.gz)
         if (config.hasCustomAnsibleGalaxyRoles()) {
             script.append("ansible-galaxy install --roles-path ~/"
-                    + AnsibleResources.ROLES_ROOT_PATH
+                    + AnsibleResources.ADDITIONAL_ROLES_ROOT_PATH
                     + " -r ~/" + AnsibleResources.REQUIREMENTS_CONFIG_FILE + "\n");
         }
         // Extract ansible roles from files (.tar.gz, .tgz)
-        script.append("cd ~/" + AnsibleResources.ROLES_ROOT_PATH + "\n");
+        script.append("cd ~/" + AnsibleResources.ADDITIONAL_ROLES_ROOT_PATH + "\n");
         script.append("for f in $(find /tmp/roles -type f -regex '.*\\.t\\(ar\\.\\)?gz'); do tar -xzf $f; done\n");
         script.append("cd ~\n");
 
@@ -173,15 +170,43 @@ public final class ShellScriptCreator {
                 append(" ${HOME}/").append(AnsibleResources.SITE_CONFIG_FILE).
                 append(" -i ${HOME}/").append(AnsibleResources.HOSTS_CONFIG_FILE).
                 append("\" --outfile /var/log/ansible-playbook.log \n");
+        return script.toString();
+    }
 
-        // Execute ansible playbook using tee
-        //script.append("ansible-playbook ~/" + AnsibleResources.SITE_CONFIG_FILE
-        //        + " -i ~/" + AnsibleResources.HOSTS_CONFIG_FILE)
-        //        .append(prepare ? " -t install" : "")
-        //       .append(" | sudo tee -a /var/log/ansible-playbook.log")
-        //        .append("\n");
+    /**
+     * ansible-playbook script to execute scale (up or down) tasks on master.
+     * @return script
+     */
+    public static String executeScaleTasksOnMaster(Scale scale) {
+        StringBuilder script = new StringBuilder();
+        script.append("python3 ${HOME}/playbook/tools/tee.py --cmd \"$(which ansible-playbook)").
+                append(" ${HOME}/").append(AnsibleResources.SITE_CONFIG_FILE).
+                append(" -i ${HOME}/").append(AnsibleResources.HOSTS_CONFIG_FILE).
+                append(" -t ").append(scale.toString()).
+                append(" -l master").
+                append("\" --outfile /var/log/ansible-playbook.log \n");
+        return script.toString();
+    }
 
-        script.append("if [ $? == 0 ]; then echo CONFIGURATION FINISHED; else echo CONFIGURATION FAILED; fi\n");
+    /**
+     * ansible-playbook script to execute whole site.yml on specified worker nodes.
+     * @param workers worker nodes the playbook should be rolled out
+     * @return script
+     */
+    public static String executePlaybookOnWorkers(List<Instance> workers) {
+        StringBuilder script = new StringBuilder();
+        script.append("sleep 30\n");
+        script.append("python3 ${HOME}/playbook/tools/tee.py --cmd \"$(which ansible-playbook)").
+                append(" ${HOME}/").append(AnsibleResources.SITE_CONFIG_FILE).
+                append(" -i ${HOME}/").append(AnsibleResources.HOSTS_CONFIG_FILE).
+                append(" -l ");
+        for (Instance worker : workers) {
+            script.append(worker.getPrivateIp());
+            if (workers.indexOf(worker) != workers.size() - 1) {
+                script.append(",");
+            }
+        }
+        script.append("\" --outfile /var/log/ansible-playbook.log \n");
         return script.toString();
     }
 }

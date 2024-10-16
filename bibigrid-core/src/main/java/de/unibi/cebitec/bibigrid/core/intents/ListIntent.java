@@ -1,202 +1,124 @@
 package de.unibi.cebitec.bibigrid.core.intents;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import de.unibi.cebitec.bibigrid.core.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 /**
  * Creates a Map of BiBiGrid cluster instances
- *
  * @author Johannes Steiner - jsteiner(at)cebitec.uni-bielefeld.de
  * @author Jan Krueger - jkrueger(at)cebitec.uni-bielefeld.de
  */
 public abstract class ListIntent extends Intent {
     private static final Logger LOG = LoggerFactory.getLogger(ListIntent.class);
-    private static final DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yy HH:mm:ss");
 
-    protected final ProviderModule providerModule;
-    protected final Client client;
-    protected final Configuration config;
+    private static final int LEN_ID_CLUSTER = 20;
+    private static final int LEN_USER = 13;
+    private static final int LEN_LAUNCH = 19;
+    private static final int LEN_KEY = 14;
+    private static final int LEN_IP_PUB = 15;
+    private static final int LEN_IP_PRIV = 15;
+    private static final int LEN_COUNT = 7;
+    private static final int LEN_ID_GROUP = 18;
+    private static final int LEN_ID_SUBNET = 11;
+    private static final int LEN_ID_NET = 11;
+    private static final int LEN_TOTAL = LEN_ID_CLUSTER + LEN_USER + LEN_LAUNCH + LEN_KEY +
+            LEN_IP_PUB + LEN_IP_PRIV + LEN_COUNT + LEN_ID_GROUP + LEN_ID_SUBNET + LEN_ID_NET;
+
     private Map<String, Cluster> clusterMap;
 
-    protected ListIntent(ProviderModule providerModule, Client client, Configuration config) {
-        this.providerModule = providerModule;
-        this.client = client;
-        this.config = config;
-    }
-
-    protected final Cluster getOrCreateCluster(String clusterId) {
-        Cluster cluster;
-        // check if entry already available
-        if (clusterMap.containsKey(clusterId)) {
-            cluster = clusterMap.get(clusterId);
-        } else {
-            cluster = new Cluster(clusterId);
-            clusterMap.put(clusterId, cluster);
-        }
-        return cluster;
+    protected ListIntent(Map<String, Cluster> clusterMap) {
+        this.clusterMap = clusterMap;
     }
 
     /**
-     * Return a Map of Cluster objects within current configuration.
+     * Return a json representation string of found cluster objects map.
      */
-    public final Map<String, Cluster> getList() {
+    public final String toJsonString(){
+        Map<String, Object> jsonMap = new HashMap<>();
+        ObjectMapper mapper = new ObjectMapper();
         if (clusterMap == null) {
             clusterMap = new HashMap<>();
-            searchClusterIfNecessary();
+            // TODO searchClusterIfNecessary();
         }
-        return clusterMap;
-    }
-
-    protected static String getClusterIdFromName(String name) {
-        String[] parts = name.split("-");
-        return parts[parts.length - 1];
-    }
-
-    protected void searchClusterIfNecessary() {
-        List<Instance> instances = getInstances();
-        if (instances != null) {
-            for (Instance instance : instances) {
-                checkInstance(instance);
+        if (clusterMap.isEmpty()) {
+            jsonMap.put("info","No BiBiGrid cluster found!");
+            try {
+                return mapper.writeValueAsString(jsonMap);
+            }
+            catch(JsonProcessingException e){
+                return "{\"Internal server error\":\"JsonProcessingException\"}";
             }
         }
-        List<Network> networks = client.getNetworks();
-        if (networks != null) {
-            for (Network network : networks) {
-                String name = network.getName();
-                if (name != null && name.startsWith(CreateClusterEnvironment.NETWORK_PREFIX)) {
-                    getOrCreateCluster(getClusterIdFromName(name)).setNetwork(network);
-                }
-            }
+        List<Map<String, Object>> list = new LinkedList<>();
+        for (Map.Entry<String, Cluster> entry : clusterMap.entrySet()) {
+            Cluster v = entry.getValue();
+            Map<String, Object> cluster = new HashMap<>();
+            cluster.put("cluster-id",v.getClusterId());
+            cluster.put("user",(v.getUser() == null) ? "-" : v.getUser());
+            cluster.put("launch date", (v.getStarted() == null) ? "-" : v.getStarted());
+            cluster.put("key name", (v.getKeyName() == null ? "-" : v.getKeyName()));
+            cluster.put("public-ip",(v.getPublicIp() == null ? "-" : v.getPublicIp()));
+            cluster.put("# inst", ((v.getMasterInstance() != null ? 1 : 0) + v.getWorkerInstances().size()));
+            cluster.put("group-id", (v.getSecurityGroup() == null ? "-" : v.getSecurityGroup()));
+            cluster.put("subnet-id", (v.getSubnet() == null ? "-" : v.getSubnet().getId()));
+            cluster.put("network-id"   , (v.getNetwork() == null ? "-" : v.getNetwork().getId()));
+            list.add(cluster);
         }
-        List<Subnet> subnets = client.getSubnets();
-        if (subnets != null) {
-            for (Subnet subnet : subnets) {
-                String name = subnet.getName();
-                if (name != null && name.startsWith(CreateClusterEnvironment.SUBNET_PREFIX)) {
-                    getOrCreateCluster(getClusterIdFromName(name)).setSubnet(subnet);
-                }
-            }
+        jsonMap.put("info", list);
+        try {
+            return mapper.writeValueAsString(jsonMap);
         }
-
-        List<String> keypairs = client.getKeypairNames();
-        if (keypairs != null) {
-            for (String name : keypairs) {
-                if (name != null && name.startsWith(CreateCluster.PREFIX)) {
-                    getOrCreateCluster(getClusterIdFromName(name)).setKeyName(name);
-                }
-            }
+        catch(JsonProcessingException e){
+            return "{\"Internal server error\":\"JsonProcessingException\"}";
         }
     }
 
-    protected abstract List<Instance> getInstances();
-
-    protected void checkInstance(Instance instance) {
-        // check if instance is a BiBiGrid instance and extract clusterId from it
-        String clusterId = getClusterIdForInstance(instance);
-        if (clusterId == null)
-            return;
-        Cluster cluster = getOrCreateCluster(clusterId);
-        loadInstanceConfiguration(instance);
-        // Check whether master or worker instance
-        String name = instance.getTag(Instance.TAG_NAME);
-        if (name == null) {
-            name = instance.getName();
-        }
-        if (name != null && name.startsWith(CreateCluster.MASTER_NAME_PREFIX)) {
-            if (cluster.getMasterInstance() == null) {
-                cluster.setMasterInstance(instance);
-                cluster.setPublicIp(instance.getPublicIp());
-                cluster.setPrivateIp(instance.getPrivateIp());
-                cluster.setKeyName(instance.getKeyName());
-                cluster.setStarted(instance.getCreationTimestamp().format(dateTimeFormatter));
-            } else {
-                LOG.error("Detected two master instances ({},{}) for cluster '{}'.", cluster.getMasterInstance().getName(),
-                        instance.getName(), clusterId);
-            }
-        } else {
-            cluster.addWorkerInstance(instance);
-        }
-        checkInstanceKeyName(instance, cluster);
-        checkInstanceUserTag(instance, cluster);
-    }
-
-    private void checkInstanceKeyName(Instance instance, Cluster cluster) {
-        //key name should be always the same for all instances of one cluster
-        if (cluster.getKeyName() != null) {
-            if (!cluster.getKeyName().equals(instance.getKeyName())) {
-                LOG.error("Detected two different keynames ({},{}) for cluster '{}'.", cluster.getKeyName(),
-                        instance.getKeyName(), cluster.getClusterId());
-            }
-        } else {
-            cluster.setKeyName(instance.getKeyName());
-        }
-    }
-
-    private void checkInstanceUserTag(Instance instance, Cluster cluster) {
-        // user should be always the same for all instances of one cluster
-        String user = instance.getTag(Instance.TAG_USER);
-        if (user != null) {
-            if (cluster.getUser() == null) {
-                cluster.setUser(user);
-            } else if (!cluster.getUser().equals(user)) {
-                LOG.error("Detected two different users ({},{}) for cluster '{}'.", cluster.getUser(), user,
-                        cluster.getClusterId());
-            }
-        }
-    }
-
-    private String getClusterIdForInstance(Instance instance) {
-        String clusterIdTag = instance.getTag(Instance.TAG_BIBIGRID_ID);
-        if (clusterIdTag != null) {
-            return clusterIdTag;
-        }
-        String name = instance.getName();
-        if (name != null && (name.startsWith(CreateCluster.MASTER_NAME_PREFIX) ||
-                name.startsWith(CreateCluster.WORKER_NAME_PREFIX))) {
-            return getClusterIdFromName(name);
-        }
-        return null;
-    }
-
-    protected abstract void loadInstanceConfiguration(Instance instance);
 
     /**
      * Return a String representation of found cluster objects map.
      */
     @Override
     public final String toString() {
-        if (clusterMap == null) {
-            clusterMap = new HashMap<>();
-            searchClusterIfNecessary();
-        }
         if (clusterMap.isEmpty()) {
-            return "No BiBiGrid cluster found!\n";
+            return "No Cluster started.";
         }
+        LOG.info("Listing Cluster Configurations:\n");
         StringBuilder display = new StringBuilder();
         Formatter formatter = new Formatter(display, Locale.US);
         display.append("\n");
-        String lineFormat = "%16s | %13s | %19s | %14s | %15s | %7s | %13s | %11s | %11s%n";
+        String lineFormat = "%" + LEN_ID_CLUSTER + "s" +
+                            " | %" + LEN_USER + "s" +
+                            " | %" + LEN_LAUNCH + "s" +
+                            " | %" + LEN_KEY + "s" +
+                            " | %" + LEN_IP_PUB + "s" +
+                            " | %" + LEN_IP_PRIV + "s" +
+                            " | %" + LEN_COUNT + "s" +
+                            " | %" + LEN_ID_GROUP + "s" +
+                            " | %" + LEN_ID_SUBNET + "s" +
+                            " | %" + LEN_ID_NET +"s%n";
         formatter.format(lineFormat,
-                "cluster-id", "user", "launch date", "key name", "public-ip", "# inst", "group-id", "subnet-id",
-                "network-id");
-        display.append(new String(new char[143]).replace('\0', '-')).append("\n");
-        for (Map.Entry<String, Cluster> entry : clusterMap.entrySet()) {
-            Cluster v = entry.getValue();
+                "cluster-id", "user", "launch date", "key name", "public-ip", "private-ip",
+                "# inst", "group-id", "subnet-id", "network-id");
+        display.append(new String(new char[(9 * 3) + LEN_TOTAL]).replace('\0', '-')).append("\n");
+        List<Cluster> clusters = new ArrayList(clusterMap.values());
+        Collections.sort(clusters);
+        for (Cluster cluster : clusters) {
             formatter.format(lineFormat,
-                    entry.getKey(),
-                    (v.getUser() == null) ? "-" : ellipsize(v.getUser(), 13),
-                    (v.getStarted() == null) ? "-" : v.getStarted(),
-                    (v.getKeyName() == null ? "-" : ellipsize(v.getKeyName(), 14)),
-                    (v.getPublicIp() == null ? "-" : v.getPublicIp()),
-                    ((v.getMasterInstance() != null ? 1 : 0) + v.getWorkerInstances().size()),
-                    (v.getSecurityGroup() == null ? "-" : ellipsize(v.getSecurityGroup(), 13)),
-                    (v.getSubnet() == null ? "-" : ellipsize(v.getSubnet().getId(), 11)),
-                    (v.getNetwork() == null ? "-" : ellipsize(v.getNetwork().getId(), 11)));
-
+                    ellipsize(cluster.getClusterId(), LEN_ID_CLUSTER),
+                    (cluster.getUser() == null) ? "-" : ellipsize(cluster.getUser(), LEN_USER),
+                    (cluster.getStarted() == null) ? "-" : cluster.getStarted(),
+                    (cluster.getKeyName() == null ? "-" : ellipsize(cluster.getKeyName(), LEN_KEY)),
+                    (cluster.getPublicIp() == null ? "-" : cluster.getPublicIp()),
+                    (cluster.getPrivateIp() == null ? "-" : cluster.getPrivateIp()),
+                    ((cluster.getMasterInstance() != null ? 1 : 0) + cluster.getWorkerInstances().size()),
+                    (cluster.getSecurityGroup() == null ? "-" : ellipsize(cluster.getSecurityGroup(), LEN_ID_GROUP)),
+                    (cluster.getSubnet() == null ? "-" : ellipsize(cluster.getSubnet().getId(), LEN_ID_SUBNET)),
+                    (cluster.getNetwork() == null ? "-" : ellipsize(cluster.getNetwork().getId(), LEN_ID_NET)));
         }
         return display.toString();
     }
@@ -204,7 +126,7 @@ public abstract class ListIntent extends Intent {
     /**
      * Shorten a string to fit a maximum length and possibly add an ellipse at the end.
      *
-     * @param s      string to shorten
+     * @param s string to shorten
      * @param maxLen maximum length for the string to fit into
      * @return shortened string
      */
@@ -219,19 +141,10 @@ public abstract class ListIntent extends Intent {
         }
     }
 
-    public final String toDetailString(String clusterId) {
-        if (clusterMap == null) {
-            clusterMap = new HashMap<>();
-            searchClusterIfNecessary();
-        }
-        if (clusterMap.isEmpty()) {
-            return "No BiBiGrid cluster found!\n";
-        }
-        if (!clusterMap.containsKey(clusterId)) {
-            return "No BiBiGrid cluster with id '" + clusterId + "' found!\n";
-        }
+    public String toDetailString(String clusterId) {
         Cluster cluster = clusterMap.get(clusterId);
         StringBuilder display = new StringBuilder();
+        display.append("Listing detailed Cluster Configuration:\n");
         display.append("cluster-id: ").append(cluster.getClusterId()).append("\n");
         display.append("user: ").append(cluster.getUser()).append("\n");
         if (cluster.getNetwork() != null) {
@@ -250,19 +163,28 @@ public abstract class ListIntent extends Intent {
             display.append("\nmaster-instance:\n");
             addInstanceToDetailString(display, cluster.getMasterInstance());
         }
-        if (cluster.getWorkerInstances() != null) {
-            for (Instance workerInstance : cluster.getWorkerInstances()) {
-                display.append("\nworker-instance:\n");
-                addInstanceToDetailString(display, workerInstance);
+        List<Instance> workerInstances = cluster.getWorkerInstances();
+        if (workerInstances != null) {
+            for (Instance workerInstance : workerInstances) {
+                    display.append("\nworker-instance:\n");
+                    addInstanceToDetailString(display, workerInstance);
             }
         }
         return display.toString();
     }
 
+    /**
+     * Displays detailed information about cluster nodes when using '-l <cluster-id>'.
+     * @param display cluster node information String
+     * @param instance cluster node
+     */
     private void addInstanceToDetailString(StringBuilder display, Instance instance) {
         display.append("  id: ").append(instance.getId()).append("\n");
         display.append("  name: ").append(instance.getName()).append("\n");
         display.append("  hostname: ").append(instance.getHostname()).append("\n");
+        if (!instance.isMaster()) {
+            display.append("  worker-batch: ").append(instance.getBatchIndex()).append("\n");
+        }
         display.append("  private-ip: ").append(instance.getPrivateIp()).append("\n");
         display.append("  public-ip: ").append(instance.getPublicIp()).append("\n");
         display.append("  key-name: ").append(instance.getKeyName()).append("\n");
@@ -271,6 +193,6 @@ public abstract class ListIntent extends Intent {
             display.append("  type: ").append(instanceConfig.getType()).append("\n");
             display.append("  image: ").append(instanceConfig.getImage()).append("\n");
         }
-        display.append("  launch-date: ").append(instance.getCreationTimestamp().format(dateTimeFormatter)).append("\n");
+        display.append("  launch-date: ").append(instance.getCreationTimestamp().format(LoadClusterConfigurationIntent.DATE_TIME_FORMATTER)).append("\n");
     }
 }

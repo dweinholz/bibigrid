@@ -5,6 +5,7 @@ import de.unibi.cebitec.bibigrid.core.model.exceptions.ClientConnectionFailedExc
 import org.openstack4j.api.OSClient;
 import org.openstack4j.api.compute.ServerGroupService;
 import org.openstack4j.api.exceptions.AuthenticationException;
+import org.openstack4j.api.exceptions.ClientResponseException;
 import org.openstack4j.model.common.Identifier;
 import org.openstack4j.model.compute.Image;
 import org.openstack4j.model.storage.block.Volume;
@@ -12,63 +13,98 @@ import org.openstack4j.openstack.OSFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Implementation of abstract class Client.
+ * Implementation of abstract class Client for Openstack cloud framework.
  *
  * @author mfriedrichs(at)techfak.uni-bielefeld.de
  * @author jkrueger(at)cebitec.uni-bielefeld.de
  */
-class ClientOpenstack extends Client {
+public class ClientOpenstack extends Client {
     private static final Logger LOG = LoggerFactory.getLogger(ClientOpenstack.class);
 
-    private final OSClient internalClient;
+    private OSClient.OSClientV3 internalClient;
+    private final ConfigurationOpenstack config;
 
     ClientOpenstack(ConfigurationOpenstack config) throws ClientConnectionFailedException {
+        this.config = config;
+        authenticate();
+    }
+
+    private static OSClient.OSClientV3 buildOSClientV3(OpenStackCredentials credentials) {
+        if (Configuration.DEBUG) {
+            LOG.info(credentials.toString());
+        }
+        Identifier project = getIdentifier(credentials.getProject(), credentials.getProjectId());
+        Identifier userDomain = getIdentifier(credentials.getUserDomain(), credentials.getUserDomainId());
+        Identifier projectDomain = getIdentifier(credentials.getProjectDomain(), credentials.getProjectDomainId());
+        return OSFactory.builderV3()
+                .endpoint(credentials.getEndpoint())
+                .credentials(credentials.getUsername(), credentials.getPassword(), userDomain)
+                .scopeToProject(project, projectDomain)
+                .authenticate();
+    }
+
+    static Identifier getIdentifier(String name, String id) {
+        if (name == null) {
+            if (id == null) {
+                LOG.error("No ProjectDomain provided. Cannot authenticate via Openstack API.");
+            } else {
+                return Identifier.byId(id);
+            }
+        } else {
+            return Identifier.byName(name);
+        }
+        return null;
+    }
+
+    public OSClient.OSClientV3 getInternal() {
+        return internalClient;
+    }
+
+    @Override
+    public void authenticate() throws ClientConnectionFailedException {
         OpenStackCredentials credentials = config.getOpenstackCredentials();
         try {
             OSFactory.enableHttpLoggingFilter(config.isDebugRequests());
-            internalClient = credentials.getDomain() != null ?
-                    buildOSClientV3(credentials) :
-                    buildOSClientV2(credentials);
+            /* openstack4j can't follow "redirect" responses, therefore
+               we try to redirect to identity version 3 manually */
+            try {
+                internalClient = buildOSClientV3(credentials);
+            } catch (ClientResponseException e) {
+                if (!credentials.getEndpoint().endsWith("/v3")){
+                    credentials.setEndpoint(credentials.getEndpoint()+"/v3");
+                    LOG.warn("AUTH endpoint seems not to point to identity api v3. Try again with"+ credentials.getEndpoint());
+                    internalClient = buildOSClientV3(credentials);
+                } else {
+                    throw new ClientResponseException(e.getMessage(),e.getStatus());
+                }
+            }
+            // select region
+            if (config.getRegion() != null && !config.getRegion().equals(credentials.getRegion())) {
+                LOG.warn("General region option '{}' overwrites Openstack credentials configuration '{}'!",config.getRegion(),credentials.getRegion());
+                internalClient.useRegion(config.getRegion());
+            } else {
+                internalClient.useRegion(credentials.getRegion());
+            }
             LOG.info("Openstack connection established.");
         } catch (AuthenticationException e) {
+            LOG.error(e.getMessage());
             if (Configuration.DEBUG) {
                 e.printStackTrace();
             }
             throw new ClientConnectionFailedException(String.format("Connection failed: %s. " +
                     "Please make sure the supplied OpenStack credentials are valid.", e.getLocalizedMessage()), e);
         } catch (Exception e) {
+            LOG.error(e.getMessage());
             if (Configuration.DEBUG) {
                 e.printStackTrace();
             }
             throw new ClientConnectionFailedException(String.format("Failed to connect openstack " +
                     "client: %s: %s", e.getClass().getSimpleName(), e.getLocalizedMessage()), e);
         }
-    }
-
-    private static OSClient buildOSClientV2(OpenStackCredentials credentials) {
-        return OSFactory.builderV2()
-                .endpoint(credentials.getEndpoint())
-                .credentials(credentials.getUsername(), credentials.getPassword())
-                .tenantName(credentials.getTenantName())
-                .authenticate();
-    }
-
-    private static OSClient buildOSClientV3(OpenStackCredentials credentials) {
-        return OSFactory.builderV3()
-                .endpoint(credentials.getEndpoint())
-                .credentials(credentials.getUsername(), credentials.getPassword(), Identifier.byName(credentials.getDomain()))
-                //.scopeToProject(Identifier.byName(credentials.getTenantName()), Identifier.byName(credentials.getDomain()))
-                .scopeToProject(Identifier.byName(credentials.getTenantName()), Identifier.byName(credentials.getTenantDomain()))
-                .authenticate();
-    }
-
-    OSClient getInternal() {
-        return internalClient;
     }
 
     @Override

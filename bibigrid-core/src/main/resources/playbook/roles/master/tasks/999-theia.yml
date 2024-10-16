@@ -1,11 +1,11 @@
 - name: Install packages
   apt:
-    name: ["python3", "make", "g++", "curl", "git"]
+    name: ["python", "make", "g++", "curl", "git"]
   when: ansible_distribution_file_variety == 'Debian'
 
 - name: install packages
   yum:
-    name: ["python3", "curl", "git", "make", "gcc", "gcc-c++"]
+    name: ["python", "curl", "git", "make", "gcc", "gcc-c++"]
   when: ansible_distribution_file_variety == 'RedHat'
 
 - name: Create NVM install dir
@@ -19,50 +19,69 @@
     theia_ide_user: "{{ ansible_env.SUDO_USER }}"
   when: theia_ide_user is not defined
 
-- name: Set fact 'theia_ide_workspace' when not defined
-  set_fact:
-    theia_ide_workspace: "{{ ansible_env.PWD }}"
-  when: theia_ide_workspace is not defined
+- block:
+    - name: Check if given workspace exists
+      stat:
+        path: "{{ ideConf.workspace}}"
+      register: workspace_path
 
-- name: Set fact 'theia_ide_workspace' when defined
+    - name: Set fact 'theia_ide_workspace' when defined workspace exists
+      set_fact:
+        theia_ide_workspace: "{{ ideConf.workspace }}"
+      when: workspace_path.stat.exists and workspace.stat.isDir
+
+  when: ideConf.workspace is defined and ideConf.workspace != "${HOME}"
+
+- name: Set fact 'theia_ide_workspace' to '${HOME}' when not defined
   set_fact:
-    theia_ide_workspace: "{{ ide_workspace }}"
-  when: theia_ide_workspace is defined
+    theia_ide_workspace: "${HOME}"
+  when: theia_ideConf.workspace is not defined
 
 - name: Install nvm
   shell: |
-    curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.34.0/install.sh | NVM_DIR={{ nvm_install_dir }} /bin/bash
+    curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.37.0/install.sh | NVM_DIR={{ nvm_install_dir }} /bin/bash
   args:
     creates: "{{ nvm_install_dir }}/nvm.sh"
     warn: false
 
-- name: Install node 8 and yarn
+- name: Install node 12 and yarn
   shell: |
-        source {{ nvm_install_dir }}/nvm.sh
-        nvm install 8
-        npm install -g yarn
+    source {{ nvm_install_dir }}/nvm.sh
+    nvm install 12
+    npm install -g yarn
   args:
     executable: bash
 
-- name: Create IDE build dir
-  file:
-    path: "{{ theia_ide_install_dir }}"
-    state: directory
+- block:
+  - name: Install prebuild theia
+    shell: |
+      curl -o- https://bibiserv.cebitec.uni-bielefeld.de/resources/bibigrid/plugins/theia-ide_node12.tar.gz | tar -xzf -
+    args:
+      chdir: "/opt"
+      creates: "{{ theia_ide_install_dir }}"
+  when: not ideConf.build
 
-- name: Copy IDE configuration to IDE build dir
-  copy:
-    src: theia/package.json
-    dest: "{{ theia_ide_install_dir }}/package.json"
-    mode: 0644
+- block:
+  - name: Create IDE build dir
+    file:
+      path: "{{ theia_ide_install_dir }}"
+      state: directory
 
-- name: build ide
-  shell: |
-        source {{ nvm_install_dir }}/nvm.sh
-        yarn
-        yarn theia build
-  args:
-    chdir: "{{ theia_ide_install_dir }}"
-    executable: bash
+  - name: Copy IDE configuration to IDE build dir
+    template:
+      src: theia/package.json.j2
+      dest: "{{ theia_ide_install_dir }}/package.json"
+      mode: 0644
+
+  - name: build ide
+    shell: |
+          source {{ nvm_install_dir }}/nvm.sh
+          yarn
+          yarn theia build
+    args:
+      chdir: "{{ theia_ide_install_dir }}"
+      executable: bash
+  when: ideConf.build == true
 
 - name: Generate IDE start skript to /usr/local/bin
   template:
